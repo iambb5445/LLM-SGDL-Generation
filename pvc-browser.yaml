@@ -1,0 +1,20 @@
+apiVersion: v1
+kind: Pod
+metadata:
+  name: pvc-browser
+  namespace: design-reasoning-lab
+spec:
+  containers:
+    - name: pvc-browser
+      image: alpine
+      command: ["sh"]
+      stdin: true
+      tty: true
+      volumeMounts:
+        - mountPath: /mnt
+          name: results
+  volumes:
+    - name: results
+      persistentVolumeClaim:
+        claimName: sgdl-evo-results
+  restartPolicy: Never

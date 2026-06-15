@@ -1,0 +1,13 @@
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: sgdl-evo-results
+  namespace: design-reasoning-lab
+spec:
+  accessModes:
+    - ReadWriteMany
+  resources:
+    requests:
+      storage: 10Gi
+  # because I need readwritemany to have parallel workers write on the same storage
+  storageClassName: rook-cephfs
