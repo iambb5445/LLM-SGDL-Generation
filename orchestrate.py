@@ -168,7 +168,7 @@ def main():
     parser.add_argument("--max-mutations-per-game", type=int, default=1, help="Maximum number of mutations per game, to avoid mutating a few games many times and diluting the next generation.")
     parser.add_argument("--max-crossover-per-game", type=int, default=1, help="Maximum number of crossover per game, to avoid mutating a few games many times and diluting the next generation.")
     parser.add_argument("--eval-workers", type=int, default=10, help="Number of workers used to parallelize evaluation process.")
-    parser.add_argument("--variant", default="", help="Optional name suffix for job names (e.g. 'llm', 'llm-skil')")
+    parser.add_argument("--variant", type="str", default="", help="Optional name suffix for job names (e.g. 'llm', 'llm-skil')")
 
     args = parser.parse_args()
     variant = args.variant
