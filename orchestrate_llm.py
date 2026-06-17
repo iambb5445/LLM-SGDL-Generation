@@ -10,14 +10,14 @@ from kube_util import get_seed, setup_logging, get_logger, get_batch_client, get
     pvc_name, namespace, pvc_transfer_session, copy_from_pvc, copy_to_pvc
 from orchestrate import run_prep_job, run_eval_job, make_cleanup_job
 from llm_connect import OpenAIChat, DeepSeekChat, OpenAILib
-from prompt import system_message, get_prompt, process_response
-import json
+from prompt import system_message, get_prompt, process_response, get_skill_refinement_prompt, process_skill_refinement_response
+from util import read_file, write_file, read_dict, write_dict
 import pandas as pd
 
 repo_url = "https://github.com/iambb5445/SolitaireGDL"
 repo_name = "sgdl"
 # I decided to put the LLM code in here instead of in another repository
-# This is because nautilus nodes every once if a while have connection problems, so it would be easier to run locally
+# This is because nautilus nodes every once in a while have connection problems, so it would be easier to run locally
 # Especially since the orchestrate code is already running locally, I can also run the LLM code
 # llm_repo_url = "https://github.com/iambb5445/..."
 # llm_repo_name = "llm"
@@ -28,21 +28,21 @@ llm_models: dict[str, Callable[[], OpenAILib]] = {
     # TODO more
 }
 
-def ask_until_valid(chat: OpenAILib, prompt: str, prev_name: str) -> tuple[str, str|None]:
+def ask_until_valid(chat: OpenAILib, prompt: str) -> str|None:
     max_retries = 3
     while True:
         try:
-            response = chat.ask(prompt)
-            sgdl = process_response(response)
-            return prev_name, sgdl # keep the same name
+            response = chat.copy().ask(prompt)
+            return response
         except Exception as e:
+            print(f"ERROR, retrying: {e}")
             max_retries -= 1
             if max_retries == 0:
-                return prev_name, None
+                print("No retries left. No GDL was created.")
+                return None
 
 def get_prev_filename(local_workdir, curr_filename: str, prev_gen: int):
-    with open(os.path.join(local_workdir, f"g{prev_gen}", "mapping.txt"), "w") as f:
-        prev_mapping: dict[str, str] = json.load(f)
+    prev_mapping = read_dict([local_workdir, f"g{prev_gen}"], "mapping.json")
     return prev_mapping[curr_filename]
 
 def get_name_from_filename(filename: str):
@@ -51,12 +51,11 @@ def get_name_from_filename(filename: str):
 def get_lineage(gen: int, filename: str, history_count: int, local_workdir: str):
     data: list[tuple[str, pd.DataFrame]] = []
     filename_iterator = filename
-    for i in range(gen - 1, max(0, gen - history_count) - 1, -1):
+    for i in range(gen - 1, max(0, gen - (history_count + 1)) - 1, -1):
         filename_iterator = get_prev_filename(local_workdir, filename_iterator, i)
-        with open(os.path.join(local_workdir, f"gen{i}", filename_iterator)) as f:
-            sgdl_of_past = f.read()
-            name = get_name_from_filename(filename_iterator)
-        eval = pd.read_csv(os.path.join(local_workdir, f"gen{i}", "history.csv")).groupby("name").get_group(name)
+        sgdl_of_past = read_file([local_workdir, f"g{i}"], filename_iterator)
+        name = get_name_from_filename(filename_iterator)
+        eval = pd.read_csv(os.path.join(local_workdir, f"g{i}", "history.csv")).groupby("name").get_group(name)
         data.append((sgdl_of_past, eval))
     data.reverse()
     return data
@@ -66,7 +65,7 @@ def prep_llm(gen: int, results_dir: str, local_workdir: str, model: str, history
     g_prev = f"{results_dir}/g{gen - 1}"
     g_curr = f"{results_dir}/g{gen}"
     local_prev = os.path.join(local_workdir, f"g{gen - 1}")
-    local_curr = os.path.join(local_workdir, f"g{gen}")
+    local_curr = os.path.join(local_workdir, f"g{gen}-temp")
     os.makedirs(local_curr, exist_ok=True)
 
     with pvc_transfer_session(core_api, log):
@@ -75,22 +74,34 @@ def prep_llm(gen: int, results_dir: str, local_workdir: str, model: str, history
 
     filenames = sorted(f for f in os.listdir(local_prev) if f.endswith(".sgdl"))
     mapping: dict[str, str] = {}
+    insights: list[str] = []
+    prev_skill_filename = os.path.join(local_prev, "skill.md") if skill else None
     for index, filename in enumerate(filenames):
         chat: OpenAILib = llm_models[model]()
-        prev_skill_filename = os.path.join(local_prev, "skill.md") if skill else None
         lineage = get_lineage(gen, filename, history_count, local_workdir)
         user_messages, assistant_messages, prompt = get_prompt(lineage, prev_skill_filename)
         for um, am in zip(user_messages, assistant_messages):
             chat.inject(um, am)
-        name, sgdl = ask_until_valid(chat, prompt, get_name_from_filename(filename))
-        # possibly, ask another question to see if skills need any refinement (only if skill is True)
-        # alternatively, this can go in process_response in the prompt.py file
+        response = ask_until_valid(chat, prompt)
+        sgdl, insight = None, None
+        if response is not None:
+            sgdl, insight = process_response(response)
+        if insight is not None:
+            insights.append(insight)
+        name = get_name_from_filename(filename)
         new_filename = f"{index}_{name}.sgdl"
         mapping[filename] = new_filename
-        with open(os.path.join(local_curr, f"{index}_{name}.sgdl"), "w") as f:
-            f.write(sgdl if sgdl is not None else lineage[0][0])
-    with open(os.path.join(local_curr, "mapping.txt"), "w") as f:
-        json.dump(mapping, f)
+        write_file(local_curr, f"{index}_{name}.sgdl", sgdl if sgdl is not None else lineage[0][0])
+    
+    if skill:
+        skill_prompt = get_skill_refinement_prompt(prev_skill_filename, insights)
+        chat = llm_models[model]()
+        refinement = ask_until_valid(chat, skill_prompt)
+        skill_content = process_skill_refinement_response(refinement) if refinement is not None else None
+        prev_skill = read_file(local_prev, "skill.md")
+        write_file(local_curr, "skill.md", skill_content if skill_content is not None else prev_skill)
+
+    write_dict(local_curr, "mapping.json", mapping)
 
     with pvc_transfer_session(core_api, log):
         log.info(f"Pushing {local_curr} -> PVC at {g_curr}")

@@ -2,6 +2,7 @@
 
 import re
 from pathlib import Path
+from typing import NamedTuple
 
 import pandas as pd
 
@@ -477,6 +478,33 @@ This fenced block must be the last thing in your response, and it must contain o
 valid SGDL (genuine `#` comments are fine within it, but no prose outside of comments). \
 You can put a short, 1-3 sentence description of what you changed and why immediately \
 before the code block.
+
+## Optional: a design insight
+
+Sometimes (you'll be told explicitly when this applies) you'll also be asked to \
+capture a short, general design insight from this particular round: a transferable \
+lesson suggested by the change you just made and its outcome, written so it would \
+still be useful advice for someone designing a completely different solitaire variant. \
+These get collected across many independently-revised variants and later distilled \
+into a shared design reference, so write them as general principles, not as a \
+narration of what you personally did this round -- e.g. "When a draw pile feeds only \
+a single foundation-type pile, increasing the redeal count has little effect on win \
+rate, since the bottleneck is the destination pile filling up rather than the source \
+running out" rather than "I increased the redeal count this round." A sentence or two \
+is enough (a few short bullet points if there's more than one distinct lesson). When \
+asked for this, put it in its own fenced block tagged `insight`, placed right before \
+the final `sgdl` block:
+
+```insight
+<a sentence or two, or a few short bullet points>
+```
+
+```sgdl
+<the full file>
+```
+
+If you weren't asked for an insight this round, just provide the `sgdl` block as \
+described above.
 '''
 
 CALL_TO_ACTION = (
@@ -484,6 +512,13 @@ CALL_TO_ACTION = (
     "improve this solitaire variant. Remember to end your response with the "
     "complete, updated file in a single ```sgdl fenced code block."
 )
+
+CALL_TO_ACTION_WITH_INSIGHT = (
+    CALL_TO_ACTION + " This round, also capture a short, general design insight "
+    'from this change and its outcome (see "Optional: a design insight" above) '
+    "in a ```insight fenced block placed right before the ```sgdl block."
+)
+
 
 def _read_skill(skill_filename: str | None) -> str | None:
     if not skill_filename:
@@ -507,9 +542,11 @@ def _skill_section(skill_content: str) -> str:
     )
 
 
+def _fmt_moves(x) -> str:
+    return str(int(x))
+
+
 def _fmt_pct(x) -> str:
-    if x is None or pd.isna(x):
-        return "N/A"
     return f"{float(x) * 100:.1f}%"
 
 
@@ -531,14 +568,10 @@ def _eval_section(eval_df: pd.DataFrame | None) -> str:
         "| Run | Win | Moves | Exhausted | Card Usage | Pile Usage |",
         "|---|---|---|---|---|---|",
     ]
-    for i, row in df.iterrows():
-        win = row.get("Win")
-        moves = row.get("Move Count")
-        exhausted = row.get("Exhausted")
-        win_s = "N/A" if pd.isna(win) else ("Yes" if bool(win) else "No")
-        exh_s = "N/A" if pd.isna(exhausted) else ("Yes" if bool(exhausted) else "No")
-        moves_s = "N/A" if moves is None or pd.isna(moves) else str(int(moves))
-        assert isinstance(i, int)
+    for i, row in enumerate(df.to_dict("records")):
+        win_s = "Yes" if row.get("Win") else "No"
+        exh_s = "Yes" if row.get("Exhausted") else "No"
+        moves_s = _fmt_moves(row.get("Move Count"))
         lines.append(
             f"| {i + 1} | {win_s} | {moves_s} | {exh_s} | "
             f"{_fmt_pct(row.get('Card Usage'))} | {_fmt_pct(row.get('Pile Usage'))} |"
@@ -582,6 +615,7 @@ def _round_label(i: int, n: int) -> str:
 
 def get_prompt(data: list[tuple[str, pd.DataFrame]], skill_filename: str | None) -> tuple[list[str], list[str], str]:
     n = len(data)
+    skill_active = skill_filename is not None
     skill_content = _read_skill(skill_filename)
 
     user_messages: list[str] = []
@@ -593,9 +627,12 @@ def get_prompt(data: list[tuple[str, pd.DataFrame]], skill_filename: str | None)
         if i == 0:
             sections.append(f"```sgdl\n{sgdl}\n```")
         sections.append(_eval_section(eval_df))
-        if is_last and skill_content:
-            sections.append(_skill_section(skill_content))
-        sections.append(CALL_TO_ACTION)
+        if is_last:
+            if skill_content:
+                sections.append(_skill_section(skill_content))
+            sections.append(CALL_TO_ACTION_WITH_INSIGHT if skill_active else CALL_TO_ACTION)
+        else:
+            sections.append(CALL_TO_ACTION)
         user_messages.append("\n\n".join(sections))
 
         if not is_last:
@@ -606,11 +643,107 @@ def get_prompt(data: list[tuple[str, pd.DataFrame]], skill_filename: str | None)
 
 
 _SGDL_BLOCK_RE = re.compile(r"```sgdl\s*\n(.*?)```", re.DOTALL | re.IGNORECASE)
+_INSIGHT_BLOCK_RE = re.compile(r"```insight\s*\n(.*?)```", re.DOTALL | re.IGNORECASE)
 _ANY_BLOCK_RE = re.compile(r"```\w*\s*\n(.*?)```", re.DOTALL)
 
 
-def process_response(response: str) -> str:
-    matches = _SGDL_BLOCK_RE.findall(response)
+def process_response(response: str) -> tuple[str, str|None]:
+    sgdl_matches = _SGDL_BLOCK_RE.findall(response)
+    if sgdl_matches:
+        gdl = sgdl_matches[-1].strip()
+    else:
+        any_matches = _ANY_BLOCK_RE.findall(response)
+        gdl = any_matches[-1].strip() if any_matches else response.strip()
+
+    insight_matches = _INSIGHT_BLOCK_RE.findall(response)
+    insight = insight_matches[-1].strip() if insight_matches else None
+
+    return gdl, insight
+
+skill_refinement_system_message = '''\
+You maintain `skill.md`, a short, general reference of design lessons for an \
+automated process that's evolving a population of solitaire game variants (written \
+in a custom format called SGDL) generation by generation.
+
+Each generation, many independently-running variants are each given exactly one \
+focused revision based on their own simulated playtest results, by a separate \
+process that has no visibility into what any of the other variants are doing. \
+Whoever makes each revision also writes a short "insight": a general, transferable \
+lesson suggested by that one specific change and its outcome, not a narration of \
+what they did. You'll be given the current skill.md (or told it doesn't exist yet, \
+if this is the first generation) plus the full batch of insights produced this \
+generation, and your job is to produce the next version of skill.md.
+
+Treat skill.md as a living document you rewrite each time, not a log you append to:
+
+- Integrate new insights into the existing structure rather than tacking them on. \
+If several insights from this generation (or an insight and an existing point) are \
+really saying the same thing in different words, merge them into one clearer, \
+possibly stronger statement -- don't keep near-duplicates as separate bullets.
+- If this generation's evidence contradicts or weakens an existing point, revise or \
+remove it rather than letting both versions stand.
+- Look for what's well-supported. If most of this generation's relevant insights \
+agree, that's worth keeping or strengthening; if only one or two insights suggest \
+something that doesn't fit with everything else, it may just be noise from one \
+particular variant rather than a real general lesson, and it's fine to leave out.
+- Write every point as a general principle about solitaire design, not as a fact \
+about one specific file's exact numbers ("foundation piles that no move rule ever \
+targets sit permanently empty regardless of other changes" is useful; "Trizug's \
+draw pile of 24 cards was too small" is not, since nobody will recognize "Trizug" \
+later).
+- Organize the document under a small number of clear headers (e.g. draw pile \
+design, difficulty and winnability, avoiding unused elements, win conditions), and \
+keep the whole thing short enough that it's actually useful as a quick reference -- \
+a sprawling document nobody can read in full defeats the purpose. A specific cap on \
+total bullet points is given to you below; treat it as a hard limit, not a target to \
+approach.
+- It's completely fine for this to be a light touch-up most generations and a more \
+substantial rewrite occasionally, depending on what the evidence actually supports.
+
+End your response with the complete new skill.md -- the whole document, not a diff -- \
+in a single fenced code block tagged `skill`, as the last thing in your response. You \
+can reason about what to keep, merge, or change beforehand.
+'''
+
+def _format_insights(insights: list[str]) -> str:
+    if len(insights) == 0:
+        return "No insights were collected this generation."
+    return "\n".join(f"{i}. {insight.strip()}" for i, insight in enumerate(insights, start=1))
+
+
+def get_skill_refinement_prompt(skill_filename: str | None, insights: list[str], max_points: int = 20) -> str:
+    current_skill = _read_skill(skill_filename)
+    if current_skill:
+        current_section = f"Current skill.md:\n\n```skill\n{current_skill}\n```"
+    else:
+        current_section = (
+            "There is no existing skill.md yet -- this is the first time it's being "
+            "written, based only on the insights below."
+        )
+
+    insights_section = (
+        f"This generation produced {len(insights)} insight(s) from independently "
+        f"revised variants:\n\n{_format_insights(insights)}"
+    )
+
+    instruction = (
+        "Produce the next version of skill.md: rewrite it as a whole, integrating "
+        "what's genuinely new or well-supported from the insights above into the "
+        f"existing document rather than appending to it. Keep the entire document to "
+        f"at most {max_points} bullet points total, organized under a small number of "
+        "clear headers. End your response with the complete new skill.md in a single "
+        "fenced code block tagged `skill`, as the last thing in your response."
+    )
+
+    content = f"{current_section}\n\n{insights_section}\n\n{instruction}"
+    return content
+
+
+_SKILL_BLOCK_RE = re.compile(r"```skill\s*\n(.*?)```", re.DOTALL | re.IGNORECASE)
+
+
+def process_skill_refinement_response(response: str) -> str:
+    matches = _SKILL_BLOCK_RE.findall(response)
     if matches:
         return matches[-1].strip()
 
