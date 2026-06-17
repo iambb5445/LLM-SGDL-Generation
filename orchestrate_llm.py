@@ -8,7 +8,7 @@ from random import Random
 from typing import Callable
 from kube_util import get_seed, setup_logging, get_logger, get_batch_client, run_setup_git, \
     pvc_name, namespace, make_job, Images, get_repo_path, submit_job, wait_for_job
-from orchestrate import run_prep_job, run_eval_job, merge_eval_csvs
+from orchestrate import run_prep_job, run_eval_job, make_cleanup_job
 from llm_connect import OpenAIChat, DeepSeekChat, OpenAILib
 from prompt import system_message, get_prompt
 import json
@@ -147,7 +147,7 @@ def main():
             sys.exit(1)
 
         # Merge partial CSVs from eval workers into evaluation.csv
-        ok = merge_eval_csvs(batch_api, gen, results_dir, variant, log)
+        ok = make_cleanup_job(batch_api, gen, results_dir, variant, log)
         if not ok:
             log.error(f"Merge job for gen {gen} failed. Exiting.")
             sys.exit(1)
