@@ -94,7 +94,8 @@ def make_cleanup_job(batch_api: client.BatchV1Api, gen: int, results_dir: str, v
             f"{gen_dir} --ignore-non-existent --prev-dir {g_prev} "
         )
         history_cmd += f"--included-history {history_count}{skill_flag}" if not oneshot else "--oneshot"
-        commands.append(history_cmd)
+        validate_cmd = f"python job_scripts/validate.py {g_prev}"
+        commands += [history_cmd, validate_cmd]
 
     job = make_job(job_name, image, commands)
     submit_job(batch_api, job, log)
