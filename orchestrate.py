@@ -66,7 +66,8 @@ def make_eval_job(job_name: str, seed: int, gen_dir: str, num_workers: int):
     )
 
 # TODO I can run this at the start of prep job instead of running this in a separate job
-def merge_eval_csvs(batch_api: client.BatchV1Api, gen: int, results_dir: str, variant: str|None, log: logging.Logger):
+def make_cleanup_job(batch_api: client.BatchV1Api, gen: int, results_dir: str, variant: str|None, log: logging.Logger,
+                     build_history: bool = False, history_count: int = 0, skill: bool = False):
     gen_dir = f"{results_dir}/g{gen}"
     job_name = f"sgdl-evo-merge-g{gen}{('-' + variant) if variant else ''}"
 
@@ -81,7 +82,20 @@ def merge_eval_csvs(batch_api: client.BatchV1Api, gen: int, results_dir: str, va
         "\""
     )
 
-    job = make_job(job_name, Images.python, [merge_cmd])
+    commands = [merge_cmd]
+    image = Images.jupyter if build_history else Images.python
+
+    if build_history:
+        g_prev = f"{results_dir}/g{gen - 1}"
+        repo_path = get_repo_path(repo_name)
+        skill_flag = " --skill" if skill else ""
+        history_cmd = (
+            f"cd {repo_path} && python job_scripts/make_llm_history.py "
+            f"{gen_dir} --ignore-non-existent --prev-dir {g_prev} --included-history {history_count}{skill_flag}"
+        )
+        commands.append(history_cmd)
+
+    job = make_job(job_name, image, commands)
     submit_job(batch_api, job, log)
     return wait_for_job(batch_api, job_name, log)
 
@@ -221,7 +235,7 @@ def main():
             sys.exit(1)
 
         # Merge partial CSVs from eval workers into evaluation.csv
-        ok = merge_eval_csvs(batch_api, gen, results_dir, variant, log)
+        ok = make_cleanup_job(batch_api, gen, results_dir, variant, log)
         if not ok:
             log.error(f"Merge job for gen {gen} failed. Exiting.")
             sys.exit(1)
