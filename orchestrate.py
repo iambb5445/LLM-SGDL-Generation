@@ -67,7 +67,7 @@ def make_eval_job(job_name: str, seed: int, gen_dir: str, num_workers: int):
 
 # TODO I can run this at the start of prep job instead of running this in a separate job
 def make_cleanup_job(batch_api: client.BatchV1Api, gen: int, results_dir: str, variant: str|None, log: logging.Logger,
-                     build_history: bool = False, history_count: int = 0, skill: bool = False):
+                     build_history: bool = False, oneshot: bool = False, history_count: int = 0, skill: bool = False):
     gen_dir = f"{results_dir}/g{gen}"
     job_name = f"sgdl-evo-merge-g{gen}{('-' + variant) if variant else ''}"
 
@@ -91,8 +91,9 @@ def make_cleanup_job(batch_api: client.BatchV1Api, gen: int, results_dir: str, v
         skill_flag = " --skill" if skill else ""
         history_cmd = (
             f"cd {repo_path} && python job_scripts/make_llm_history.py "
-            f"{gen_dir} --ignore-non-existent --prev-dir {g_prev} --included-history {history_count}{skill_flag}"
+            f"{gen_dir} --ignore-non-existent --prev-dir {g_prev} "
         )
+        history_cmd += f"--included-history {history_count}{skill_flag}" if not oneshot else "--oneshot"
         commands.append(history_cmd)
 
     job = make_job(job_name, image, commands)
