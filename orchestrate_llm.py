@@ -6,8 +6,8 @@ import os
 import time
 from random import Random
 from typing import Callable
-from kube_util import get_seed, setup_logging, get_logger, get_batch_client, run_setup_git, \
-    pvc_name, namespace, make_job, Images, get_repo_path, submit_job, wait_for_job
+from kube_util import get_seed, setup_logging, get_logger, get_batch_client, get_core_client, run_setup_git, \
+    pvc_name, namespace, pvc_transfer_session, copy_from_pvc, copy_to_pvc
 from orchestrate import run_prep_job, run_eval_job, make_cleanup_job
 from llm_connect import OpenAIChat, DeepSeekChat, OpenAILib
 from prompt import system_message, get_prompt
@@ -27,56 +27,37 @@ llm_models: dict[str, Callable[[], OpenAILib]] = {
     # TODO more
 }
 
-def run_history_job(gen: int, results_dir: str, variant: str, 
-                    oneshot: bool, history_count: int, skill: bool, batch_api: client.BatchV1Api,
-                    log: logging.Logger):
+def prep_llm(gen: int, results_dir: str, local_workdir: str, model: str, history_count: int, skill: bool,
+             variant: str, log: logging.Logger, batch_api: client.BatchV1Api, core_api: client.CoreV1Api) -> bool:
     g_prev = f"{results_dir}/g{gen - 1}"
     g_curr = f"{results_dir}/g{gen}"
-    repo_path = get_repo_path(repo_name)
-    job_name = f"sgdl-evo-history-g{gen}{('-' + variant) if variant else ''}"
-    # run_command = "pypy3"
-    run_command = "python"
+    local_prev = os.path.join(local_workdir, f"g{gen - 1}")
+    local_curr = os.path.join(local_workdir, f"g{gen}")
+    os.makedirs(local_curr, exist_ok=True)
 
-    if oneshot:
-        commands = [
-            f"mkdir -p {g_curr}",
-            
-            f"cd {repo_path} && {run_command} job_scripts/make_llm_history.py "
-            f"{g_curr} --ignore-non-existent --oneshot"
-        ]
-    else:
-        commands = [
-            f"mkdir -p {g_curr}",
-            
-            f"cd {repo_path} && {run_command} job_scripts/make_llm_history.py "
-            f"{g_curr} --ignore-non-existent --prev-dir {g_prev} --included-history {history_count} --skill {skill}"
-        ]
+    with pvc_transfer_session(core_api, log):
+        log.info(f"Pulling {g_prev} from PVC -> {local_prev}")
+        copy_from_pvc(g_prev, local_prev, log)
 
-    job = make_job(job_name, Images.jupyter, commands)
-    submit_job(batch_api, job, log)
-    return wait_for_job(batch_api, job_name, log)
-
-def prep_llm(gen: int, results_dir: str, model: str, history_count: int, skill: bool,
-             variant: str, log: logging.Logger, batch_api: client.BatchV1Api) -> bool:
-    g_prev = f"{results_dir}/g{gen - 1}"
-    g_curr = f"{results_dir}/g{gen}"
-    # TODO pull results from the PVC
-    filenames = sorted([])
+    filenames = sorted(f for f in os.listdir(local_prev) if f.endswith(".sgdl"))
     mapping = {}
     for index, filename in enumerate(filenames):
         chat: OpenAILib = llm_models[model]()
-        prev_skill_filename = os.path.join(g_prev, "skill.md") if skill else None
+        prev_skill_filename = os.path.join(local_prev, "skill.md") if skill else None
         data = [] # TODO get sgdl from filename and get its evaluation from evaluation.csv for any number of history
         response = chat.ask(get_prompt([], prev_skill_filename))
         name = "" # TODO extract from response
         new_filename = f"{index}_{name}.sgdl"
         mapping[filename] = new_filename
-        # TODO extract sgdl from response and save as new_filename in g_curr
-    with open(os.path.join(g_curr, "mapping.txt"), "w") as f:
+        # TODO extract sgdl from response and save as new_filename in local_curr
+    with open(os.path.join(local_curr, "mapping.txt"), "w") as f:
         json.dump(mapping, f)
-    # TODO push results to the PVC
     # TODO update skill
-    run_history_job(gen, results_dir, variant, False, history_count, skill, batch_api, log)
+
+    with pvc_transfer_session(core_api, log):
+        log.info(f"Pushing {local_curr} -> PVC at {g_curr}")
+        copy_to_pvc(local_curr, g_curr, log)
+
     return True
 
 def main():
@@ -92,6 +73,7 @@ def main():
     parser.add_argument('--skill', action="store_true", help="If true, the LLM will update a skill.md file based on each evaluation results. This file is passed to the LLM at every point and is updated only after evaluation of each generation.")
     parser.add_argument("--eval-workers", type=int, default=10, help="Number of workers used to parallelize evaluation process.")
     parser.add_argument("--variant", type=str, default="", help="Optional name suffix for job names (e.g. 'llm', 'llm-skil')")
+    parser.add_argument("--local-workdir", default=None, help="Local directory used to stage generations when passing to LLM. If not given (recommended), uses timestamp and variant.")
 
     args = parser.parse_args()
     variant = args.variant
@@ -102,6 +84,7 @@ def main():
     end_gen = args.end_gen
     population_size = args.population_size
     worker_count = args.eval_workers
+    local_workdir = args.local_workdir if args.local_workdir else f"/local_workdir{('-' + variant) if variant else ''}/{timestamp}"
     llm_model: str = args.llm_model
     assert llm_model in llm_models.keys(), f"Model is not valid. Valid models are: {', '.join([key for key in llm_models.keys()])}"
     llm_history: int = args.llm_history
@@ -114,6 +97,7 @@ def main():
     log = get_logger(__name__)
 
     batch_api = get_batch_client()
+    core_api = get_core_client()
 
     run_setup_git(batch_api, repo_url, repo_name, log)
 
@@ -135,7 +119,7 @@ def main():
             ok = run_prep_job(gen, Random(gen_seed), results_dir, variant, population_size,
                               0, 0, 0, 0, 0, batch_api, log)
         else:
-            ok = prep_llm(gen, results_dir, llm_model, llm_history, skill, variant, log, batch_api)
+            ok = prep_llm(gen, results_dir, local_workdir, llm_model, llm_history, skill, variant, log, batch_api, core_api)
 
         if not ok:
             log.error(f"Prep job for gen {gen} failed. Exiting.")
@@ -146,8 +130,8 @@ def main():
             log.error(f"Eval job for gen {gen} failed. Exiting.")
             sys.exit(1)
 
-        # Merge partial CSVs from eval workers into evaluation.csv
-        ok = make_cleanup_job(batch_api, gen, results_dir, variant, log)
+        ok = make_cleanup_job(batch_api, gen, results_dir, variant, log, oneshot=False,
+                              build_history=(gen > 0), history_count=llm_history, skill=skill)
         if not ok:
             log.error(f"Merge job for gen {gen} failed. Exiting.")
             sys.exit(1)
