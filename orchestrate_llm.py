@@ -10,8 +10,9 @@ from kube_util import get_seed, setup_logging, get_logger, get_batch_client, get
     pvc_name, namespace, pvc_transfer_session, copy_from_pvc, copy_to_pvc
 from orchestrate import run_prep_job, run_eval_job, make_cleanup_job
 from llm_connect import OpenAIChat, DeepSeekChat, OpenAILib
-from prompt import system_message, get_prompt
+from prompt import system_message, get_prompt, process_response
 import json
+import pandas as pd
 
 repo_url = "https://github.com/iambb5445/SolitaireGDL"
 repo_name = "sgdl"
@@ -27,8 +28,41 @@ llm_models: dict[str, Callable[[], OpenAILib]] = {
     # TODO more
 }
 
-def prep_llm(gen: int, results_dir: str, local_workdir: str, model: str, history_count: int, skill: bool,
-             variant: str, log: logging.Logger, batch_api: client.BatchV1Api, core_api: client.CoreV1Api) -> bool:
+def ask_until_valid(chat: OpenAILib, prompt: str, prev_name: str) -> tuple[str, str|None]:
+    max_retries = 3
+    while True:
+        try:
+            response = chat.ask(prompt)
+            sgdl = process_response(response)
+            return prev_name, sgdl # keep the same name
+        except Exception as e:
+            max_retries -= 1
+            if max_retries == 0:
+                return prev_name, None
+
+def get_prev_filename(local_workdir, curr_filename: str, prev_gen: int):
+    with open(os.path.join(local_workdir, f"g{prev_gen}", "mapping.txt"), "w") as f:
+        prev_mapping: dict[str, str] = json.load(f)
+    return prev_mapping[curr_filename]
+
+def get_name_from_filename(filename: str):
+    return filename.split("_")[-1].split(".")[0]
+
+def get_lineage(gen: int, filename: str, history_count: int, local_workdir: str):
+    data: list[tuple[str, pd.DataFrame]] = []
+    filename_iterator = filename
+    for i in range(gen - 1, max(0, gen - history_count) - 1, -1):
+        filename_iterator = get_prev_filename(local_workdir, filename_iterator, i)
+        with open(os.path.join(local_workdir, f"gen{i}", filename_iterator)) as f:
+            sgdl_of_past = f.read()
+            name = get_name_from_filename(filename_iterator)
+        eval = pd.read_csv(os.path.join(local_workdir, f"gen{i}", "history.csv")).groupby("name").get_group(name)
+        data.append((sgdl_of_past, eval))
+    data.reverse()
+    return data
+
+def prep_llm(gen: int, results_dir: str, local_workdir: str, model: str, history_count: int,
+             skill: bool, log: logging.Logger, core_api: client.CoreV1Api) -> bool:
     g_prev = f"{results_dir}/g{gen - 1}"
     g_curr = f"{results_dir}/g{gen}"
     local_prev = os.path.join(local_workdir, f"g{gen - 1}")
@@ -40,19 +74,21 @@ def prep_llm(gen: int, results_dir: str, local_workdir: str, model: str, history
         copy_from_pvc(g_prev, local_prev, log)
 
     filenames = sorted(f for f in os.listdir(local_prev) if f.endswith(".sgdl"))
-    mapping = {}
+    mapping: dict[str, str] = {}
     for index, filename in enumerate(filenames):
         chat: OpenAILib = llm_models[model]()
         prev_skill_filename = os.path.join(local_prev, "skill.md") if skill else None
-        data = [] # TODO get sgdl from filename and get its evaluation from evaluation.csv for any number of history
-        response = chat.ask(get_prompt([], prev_skill_filename))
-        name = "" # TODO extract from response
+        lineage = get_lineage(gen, filename, history_count, local_workdir)
+        name, sgdl = ask_until_valid(chat, get_prompt(lineage, prev_skill_filename), get_name_from_filename(filename))
         new_filename = f"{index}_{name}.sgdl"
         mapping[filename] = new_filename
-        # TODO extract sgdl from response and save as new_filename in local_curr
+        with open(os.path.join(local_curr, f"{index}_{name}.sgdl"), "w") as f:
+            f.write(sgdl if sgdl is not None else lineage[0][0])
     with open(os.path.join(local_curr, "mapping.txt"), "w") as f:
         json.dump(mapping, f)
-    # TODO update skill
+    if skill:
+        # TODO update skill
+        pass
 
     with pvc_transfer_session(core_api, log):
         log.info(f"Pushing {local_curr} -> PVC at {g_curr}")
@@ -103,10 +139,10 @@ def main():
 
     log.info("=" * 50)
     log.info(f"Starting evolution: gen {start_gen} to {end_gen} | Seed: {expr_seed} | Timestamp: {timestamp}")
-    log.info(f"Population size {population_size} | LLM ...") # TODO
+    log.info(f"Population size {population_size} | Model {llm_model} | History {llm_history} | Skill {skill}")
     log.info(f"Number of evaluation workers: {worker_count}")
     log.info(f"Namespace: {namespace} | PVC: {pvc_name} | Variant: {variant}")
-    log.info(f"Results at {results_dir}")
+    log.info(f"Results at {results_dir} | Local Workdir {local_workdir}")
     log.info("=" * 50)
 
     for gen in range(args.start_gen, args.end_gen + 1):
@@ -119,7 +155,7 @@ def main():
             ok = run_prep_job(gen, Random(gen_seed), results_dir, variant, population_size,
                               0, 0, 0, 0, 0, batch_api, log)
         else:
-            ok = prep_llm(gen, results_dir, local_workdir, llm_model, llm_history, skill, variant, log, batch_api, core_api)
+            ok = prep_llm(gen, results_dir, local_workdir, llm_model, llm_history, skill, log, core_api)
 
         if not ok:
             log.error(f"Prep job for gen {gen} failed. Exiting.")
