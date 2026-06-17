@@ -79,16 +79,18 @@ def prep_llm(gen: int, results_dir: str, local_workdir: str, model: str, history
         chat: OpenAILib = llm_models[model]()
         prev_skill_filename = os.path.join(local_prev, "skill.md") if skill else None
         lineage = get_lineage(gen, filename, history_count, local_workdir)
-        name, sgdl = ask_until_valid(chat, get_prompt(lineage, prev_skill_filename), get_name_from_filename(filename))
+        user_messages, assistant_messages, prompt = get_prompt(lineage, prev_skill_filename)
+        for um, am in zip(user_messages, assistant_messages):
+            chat.inject(um, am)
+        name, sgdl = ask_until_valid(chat, prompt, get_name_from_filename(filename))
+        # possibly, ask another question to see if skills need any refinement (only if skill is True)
+        # alternatively, this can go in process_response in the prompt.py file
         new_filename = f"{index}_{name}.sgdl"
         mapping[filename] = new_filename
         with open(os.path.join(local_curr, f"{index}_{name}.sgdl"), "w") as f:
             f.write(sgdl if sgdl is not None else lineage[0][0])
     with open(os.path.join(local_curr, "mapping.txt"), "w") as f:
         json.dump(mapping, f)
-    if skill:
-        # TODO update skill
-        pass
 
     with pvc_transfer_session(core_api, log):
         log.info(f"Pushing {local_curr} -> PVC at {g_curr}")
