@@ -143,6 +143,8 @@ class OpenAIChat(OpenAILib):
         GPT_Turbo_35 = "gpt-3.5-turbo"
         GPT_4O = "gpt-4o"
         GPT_4O_mini = "gpt-4o-mini"
+        GPT_5 = "gpt-5-2025-08-07"
+        GPT_54 = "gpt-5.4-2026-03-05"
     
     TOKEN_LIMITS = { #https://platform.openai.com/account/limits
         OpenAIModel.GPT_4: 300000,
@@ -150,6 +152,8 @@ class OpenAIChat(OpenAILib):
         OpenAIModel.GPT_Turbo_35: 10000000,
         OpenAIModel.GPT_4O: 2000000,
         OpenAIModel.GPT_4O_mini: 10000000,
+        OpenAIModel.GPT_5: 4000000,
+        OpenAIModel.GPT_54: 4000000,
     }
     CLIENT = None
     def __init__(self, openAI_model:OpenAIChat.OpenAIModel, system_message: str|None=None, chat_format=True):
@@ -188,26 +192,13 @@ class OpenAIChat(OpenAILib):
         return request
 
 class GeminiChat(OpenAILib):
-    CREDENTIAL_TIMER = None
     class GeminiModel(StrEnum):
-        Gemini_1_Pro = "google/gemini-1.0-pro"
-        Gemini_15_Pro_002 = "google/gemini-1.5-pro-002"
-        Gemini_15_Flash_002 = "google/gemini-1.5-flash-002"
-    
+        Gemini_3_Flash = "gemini-3-flash-preview"
     TOKEN_LIMITS = {
-        # https://cloud.google.com/vertex-ai/generative-ai/docs/quotas
-        # the real limitations here are the requets per minute limits, which has not been implemented here
-        GeminiModel.Gemini_1_Pro: 4000000,
-        GeminiModel.Gemini_15_Pro_002: 4000000,
-        GeminiModel.Gemini_15_Flash_002: 4000000,
+        GeminiModel.Gemini_3_Flash: 2000000,
     }
-
     REQUEST_LIMITS = {
-        # https://cloud.google.com/vertex-ai/generative-ai/docs/quotas
-        # the real limitations here are the requets per minute limits, which has not been implemented here
-        GeminiModel.Gemini_1_Pro: 300,
-        GeminiModel.Gemini_15_Pro_002: 60,
-        GeminiModel.Gemini_15_Flash_002: 200,
+        GeminiModel.Gemini_3_Flash: 1000,
     }
 
     CLIENT = None
@@ -222,22 +213,10 @@ class GeminiChat(OpenAILib):
         return ret
 
     def get_client(self):
-        expired = False
-        if GeminiChat.CREDENTIAL_TIMER is not None and (time.time() - GeminiChat.CREDENTIAL_TIMER) > 30*60:
-            expired = True
-        if GeminiChat.CLIENT is not None and not expired:
-            return GeminiChat.CLIENT
-        GeminiChat.CREDENTIAL_TIMER = time.time()
-        print("refreshing the credentials")
-        import google.auth
-        import google.auth.transport.requests
-        creds, project = google.auth.default()
-        auth_req = google.auth.transport.requests.Request()
-        creds.refresh(auth_req) # type: ignore
-        from auth import Gemini_Project_ID as project_id
-        base_url = f'https://us-central1-aiplatform.googleapis.com/v1beta1/projects/{project_id}/locations/us-central1/endpoints/openapi'
-        api_key = creds.token # type: ignore
-        GeminiChat.CLIENT = openai.OpenAI(api_key=api_key, base_url=base_url)
+        from auth import Gemini_AUTH
+        api_key = Gemini_AUTH
+        if GeminiChat.CLIENT is None:
+            GeminiChat.CLIENT = openai.OpenAI(api_key=api_key, base_url="https://generativelanguage.googleapis.com/v1beta/openai/")
         return GeminiChat.CLIENT
     
     def _get_token_limit_per_minute(self) -> int|None:
@@ -286,42 +265,32 @@ class DeepSeekChat(OpenAILib):
     
 class DeepInfraChat(OpenAILib):
     class DeepInfraModel(StrEnum):
-        DEEP_SEEK_R1 = "deepseek-ai/DeepSeek-R1"
-        LLAMA_3_8B_I = "meta-llama/Meta-Llama-3-8B-Instruct"
-        LLAMA_3_70B_I = "meta-llama/Meta-Llama-3-70B-Instruct"
-        LLAMA_33_70B_I = "meta-llama/Llama-3.3-70B-Instruct"
-        GEMINI_25_FLASH = "google/gemini-2.5-flash"
+        Llama4_400B = "meta-llama/Llama-4-Maverick-17B-128E-Instruct-FP8"
     
-    TOKEN_LIMITS = { # ?: https://deepinfra.com/docs/advanced/rate-limits
-        DeepInfraModel.DEEP_SEEK_R1: 10_000_000,
-        DeepInfraModel.LLAMA_3_8B_I: 10_000_000,
-        DeepInfraModel.LLAMA_3_70B_I: 10_000_000,
-        DeepInfraModel.LLAMA_33_70B_I: 10_000_000,
-        DeepInfraModel.GEMINI_25_FLASH: 10_000_000,
+    TOKEN_LIMITS = {
+        DeepInfraModel.Llama4_400B: 10_000_000
     }
     
     CLIENT = None
-    def __init__(self, deepInfra_model:DeepInfraChat.DeepInfraModel, system_message: str|None=None, chat_format=True):
-        if deepInfra_model == DeepInfraChat.DeepInfraModel.DEEP_SEEK_R1:
-            input("[Warning] Using the more expensive deep seek reasoner model [press Enter to continue]")
-        self.deepInfra_model = deepInfra_model
-        super().__init__(str(self.deepInfra_model), system_message, chat_format)
+    def __init__(self, deepinfra_model:DeepInfraChat.DeepInfraModel, system_message: str|None=None, chat_format=True):
+        self.deepinfra_model = deepinfra_model
+        super().__init__(str(self.deepinfra_model), system_message, chat_format)
     
     # TODO perhaps this should be moved to openAILib, since it has info about the existance of a chat_log
     def copy(self) -> DeepInfraChat:
-        ret = DeepInfraChat(self.deepInfra_model, None, self.chat_format)
+        ret = DeepInfraChat(self.deepinfra_model, None, self.chat_format)
         ret.chat_log = copy.deepcopy(self.chat_log)
         return ret
 
     def get_client(self):
         from auth import DeepInfra_AUTH
         api_key = DeepInfra_AUTH
-        if OpenAIChat.CLIENT is None:
-            OpenAIChat.CLIENT = openai.OpenAI(api_key=api_key, base_url="https://api.deepinfra.com/v1/openai")
-        return OpenAIChat.CLIENT
+        if DeepInfraChat.CLIENT is None:
+            DeepInfraChat.CLIENT = openai.OpenAI(api_key=api_key, base_url="https://api.deepinfra.com/v1/openai")
+        return DeepInfraChat.CLIENT
     
     def _get_token_limit_per_minute(self) -> int|None:
-        return DeepInfraChat.TOKEN_LIMITS[self.deepInfra_model] #TODO share between parallel instances
+        return DeepInfraChat.TOKEN_LIMITS[self.deepinfra_model] #TODO share between parallel instances
     
     def _get_request_limit_per_minute(self) -> int|None:
         return None
