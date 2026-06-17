@@ -1,0 +1,5 @@
+OpenAI_AUTH = 'use your own authentication code here'
+Gemini_AUTH = 'use your own authentication code here'
+DeepSeek_AUTH = 'use your own authentication code here'
+Gemini_AUTH = 'use your own authentication code here'
+DeepInfra_AUTH = 'use your own authentication code here'

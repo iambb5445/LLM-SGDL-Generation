@@ -165,8 +165,8 @@ def main():
     parser.add_argument("--mutation-count", type=int, default=20, help="How many games per generation are created using mutation (will not generate anything if there is not at least 1 good parent available)")
     parser.add_argument("--crossover-count", type=int, default=20, help="How many games per generation are created using crossover (will not generate anything if there are not at least 2 good parents available)")
     parser.add_argument("--max-copied-count", type=int, default=30, help="How many games per generation are good games copied from previous generation")
-    parser.add_argument("--max-mutations-per-game", type=int, default=1, help="Maximum number of mutations per game, to avoid mutating a few games many times and dilute the next generation.")
-    parser.add_argument("--max-crossover-per-game", type=int, default=1, help="Maximum number of crossover per game, to avoid mutating a few games many times and dilute the next generation.")
+    parser.add_argument("--max-mutations-per-game", type=int, default=1, help="Maximum number of mutations per game, to avoid mutating a few games many times and diluting the next generation.")
+    parser.add_argument("--max-crossover-per-game", type=int, default=1, help="Maximum number of crossover per game, to avoid mutating a few games many times and diluting the next generation.")
     parser.add_argument("--eval-workers", type=int, default=10, help="Number of workers used to parallelize evaluation process.")
     parser.add_argument("--variant", default="", help="Optional name suffix for job names (e.g. 'llm', 'llm-skil')")
 
