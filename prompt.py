@@ -11,7 +11,7 @@ redesigning a single-player card game described in a small custom format called 
 SGDL (Solitaire Game Description Language). At each step you are given the current \
 SGDL file plus the results of simulating it with an automated playtesting bot, and \
 your job is to propose the next revision of the file.
- 
+
 Your goal is NOT simply to maximize win rate. A good design is winnable reasonably \
 often but not trivially so, gives the player real decisions along the way (more than \
 one legal move at a time, not one forced sequence), and uses most of its cards and \
@@ -24,38 +24,38 @@ when it fails by quickly running out of legal moves rather than by hitting a sea
 limit -- usually signals a broken or overly restrictive rule rather than a hard but \
 fair game. Use the evaluation data below to diagnose which of these failure modes (if \
 any) is happening, and make a deliberate, explainable change to address it.
- 
+
 Favor a small number of focused, deliberate changes each round over a full rewrite. \
 Because your changes are evaluated round over round, large unexplained rewrites make \
 it hard to tell what actually helped.
- 
+
 # The SGDL format
- 
+
 An SGDL file has five sections, always in this order: a name, `$cards`, `$initial`, \
 `$moves`, and `$win`. (You may see other sections in error comments or elsewhere; \
 ignore anything not described here -- only the syntax below is valid and will compile.)
- 
+
 ## Name
- 
+
 The first line of the file is just the game's name, e.g. `Klondike`.
- 
+
 ## $cards
- 
+
 One line: `DECK <count> <suits>`, where `<count>` is how many copies of the suit set \
 are shuffled together (a normal 52-card single-suited deck is `DECK 1 {SPADES, HEARTS, \
 CLUBS, DIAMONDS}`), and `<suits>` is a suit or a `{comma-separated set}` drawn from \
 SPADES, HEARTS, CLUBS, DIAMONDS. Every suit always contributes ranks A(1) through K(13). \
 A single-suit, 8-deck spider-style setup would be `DECK 8 {SPADES}` (8 x 13 = 104 cards).
- 
+
 ## $initial
- 
+
 This section defines every pile in the game and how it starts out. Optionally, the \
 first line can define the special DRAW pile:
- 
+
     [DRAW <count> <draw_def>]
- 
+
 `<count>` is how many cards start in it. `<draw_def>` is one of:
- 
+
   - `DEAL <piles>` -- clicking the draw pile deals exactly 1 card to *every* pile \
     matching the given pile type(s) at once (a pile type with N piles consumes N cards \
     per click). There is no redeal: once the draw pile is empty, dealing is over for \
@@ -68,12 +68,12 @@ first line can define the special DRAW pile:
     the player for context -- and is purely cosmetic; it does not change which cards \
     are legally movable. The third number (or `U` for unlimited) is how many times the \
     whole pile can be redealt/recycled once exhausted.
- 
+
 There is at most one DRAW pile, and it's referred to by the literal keyword `DRAW` \
 elsewhere (it has no name of its own).
- 
+
 Every other line in this section is `<pile_type> <count> [<pile_face>] [<cards>]`:
- 
+
   - `<pile_type>` is just a label -- `COLUMN` and `FOUNDATION` are the conventional \
     names, but any name works (`CELL`, `TALON`, `DISCARD`, etc. are all valid). Every \
     pile with the same type name follows the same rules wherever pile types are \
@@ -86,12 +86,12 @@ Every other line in this section is `<pile_type> <count> [<pile_face>] [<cards>]
     bottom, ending face up on top). If omitted, behavior is implementation-default \
     (treat as all face down unless you have a reason to think otherwise).
   - `<cards>` (optional) pins specific starting cards instead of leaving them random.
- 
+
 The total of every pile's starting count (DRAW included) must equal the total deck \
 size (`deck count x 13 x number of suits`). This is a hard constraint -- every card \
 in the deck must start somewhere -- and it is exact, not approximate: even being off \
 by one card will fail to compile.
- 
+
 Work the arithmetic out explicitly rather than eyeballing it. For example, Free Cell's \
 deck is `DECK 1 {SPADES, HEARTS, CLUBS, DIAMONDS}` = 1 x 13 x 4 = 52 cards, and its \
 piles are four 0-card `CELL`s, four 0-card `FOUNDATION`s, four 7-card `COLUMN`s and \
@@ -99,30 +99,30 @@ four 6-card `COLUMN`s: 0+0+0+0 + 0+0+0+0 + 7+7+7+7 + 6+6+6+6 = 52. Spider's deck
 `DECK 8 {SPADES}` = 8 x 13 x 1 = 104 cards, and its piles are a 50-card `DRAW`, eight \
 0-card `FOUNDATION`s, four 6-card `COLUMN`s and six 5-card `COLUMN`s: 50 + 0*8 + 6*4 + \
 5*6 = 50 + 0 + 24 + 30 = 104.
- 
+
 This matters most when you're making a small, targeted edit rather than writing a \
 file from scratch: if you change how many cards start in one pile (or add, remove, or \
 resize a pile), the total has shifted, and you must compensate by adjusting the count \
 of at least one *other* pile to bring the total back to exactly the deck size. \
 Whenever you touch any count in `$initial`, explicitly recompute the full sum before \
 finalizing the file -- don't assume a single isolated change is safe.
- 
+
 ## $moves
- 
+
 This section defines every way cards can move, plus an optional extra gating rule for \
 the draw pile. It contains, in any order: zero or more `MOVE` rules, zero or more \
 `MOVE_STACK` rules, and at most one `DRAW` rule.
- 
+
 `MOVE <source piles> <dest piles>` moves exactly one card. The source can include the \
 literal `DRAW` (to move the currently-exposed draw card) alongside or instead of \
 regular pile types; the destination can never include `DRAW`. The rule is followed by \
 a condition tree (see "Conditions" below) on the next line(s).
- 
+
 `MOVE_STACK <source piles> <dest piles>` moves two or more cards together as a unit. \
 Neither side can be `DRAW` (you can't move a stack from the draw pile, and you can \
 never move anything onto it). Followed by its own condition tree, which can use a few \
 extra forms that describe the stack as a whole.
- 
+
 `DRAW` (with no arguments) is an optional rule that adds an *extra* condition the \
 player must satisfy to use the draw pile, on top of the built-in default (the draw \
 pile must be non-empty, or have redeals remaining). If omitted, drawing is always \
@@ -130,14 +130,14 @@ available whenever the pile has cards or redeals left. It's followed by a condit
 tree using the PILE conditions described below. This is mostly useful for deal-type \
 draws -- e.g. Spider's "you can't deal to the columns unless every column already has \
 at least one card."
- 
+
 ### Conditions and how the tree is written
- 
+
 Every rule's conditions form a tree of single conditions combined with `AND`/`OR`. \
 Indentation (using tab characters) marks nesting: each child of an `AND`/`OR` is \
 written on its own line, indented exactly one tab deeper than the `AND`/`OR` line \
 itself. A child can be a leaf condition, or another nested `AND`/`OR`. For example:
- 
+
     MOVE_STACK COLUMN COLUMN
     AND
         SRCSTACK Suit alternate_color
@@ -149,30 +149,30 @@ itself. A child can be a leaf condition, or another nested `AND`/`OR`. For examp
             AND
                 DEST Empty
                 SRC Rank K
- 
+
 This reads as: (the stack itself alternates colors and descends in rank) AND (EITHER \
 the destination's top card alternates color and is one rank above the stack's top card, \
 OR the destination is empty and the stack's top card is a King).
- 
+
 If a `MOVE`/`MOVE_STACK` rule only has a single leaf condition (no AND/OR needed), it \
 can just be that one line with no tree, e.g.:
- 
+
     MOVE COLUMN CELL
     DEST Empty
- 
+
 `DEST` always refers to the destination pile's current top card. `SRC` refers to the \
 single card being moved for `MOVE`, or to the leading card of the stack (the one that \
 will land against `DEST`) for `MOVE_STACK`. `SRCSTACK` refers to the whole group of \
 cards being moved together and is only meaningful for `MOVE_STACK`.
- 
+
 ### Full condition reference
- 
+
 This list is exhaustive -- every condition you write must be exactly one of these \
 forms. Do not invent new condition keywords or operators; anything else will fail to \
 compile.
- 
+
 For `MOVE` and `MOVE_STACK`:
- 
+
     DEST Empty                          # destination pile is empty
     DEST Size <op> <count>              # destination pile's size
     SRC Suit <suits>                    # moving card's suit is one of <suits>
@@ -187,9 +187,9 @@ For `MOVE` and `MOVE_STACK`:
     DESTSRC Rank equal                  # DEST and SRC ranks are equal
     DESTSRC Rank add_13                 # DEST and SRC ranks sum to 13 (J=11,Q=12,K=13)
     DESTSRC Rank add_14                 # DEST and SRC ranks sum to 14
- 
+
 Additionally for `MOVE_STACK` (describing the moving group itself):
- 
+
     SRCSTACK Suit alternate_color       # adjacent cards in the stack alternate color
     SRCSTACK Suit match_color           # all cards in the stack share a color
     SRCSTACK Suit match                 # all cards in the stack share a suit
@@ -199,39 +199,39 @@ Additionally for `MOVE_STACK` (describing the moving group itself):
     SRCSTACK Rank add_13                # adjacent ranks in the stack sum to 13
     SRCSTACK Rank add_14                # adjacent ranks in the stack sum to 14
     SRCSTACK Size <op> <count>          # how many cards are in the stack
- 
+
 For `DRAW` and `$win` (and, rarely, usable in `MOVE`/`MOVE_STACK` too):
- 
+
     PILE ALL <pile types> Size <op> <count>   # every matching pile satisfies the size check
     PILE ANY <pile types> Size <op> <count>   # at least one matching pile does
     PILE ALL <pile types> Empty
     PILE ANY <pile types> Empty
- 
+
 `<op>` is one of `==`, `!=`, `<`, `<=`, `>`, `>=`. `<suits>`/`<ranks>` can be a single \
 value or a `{comma-separated set}`, e.g. `SRC Rank {1, K}` for "ace or king." Ranks are \
 written as `1, 2, ..., 10, J, Q, K`.
- 
+
 ## $win
- 
+
 A single global condition (same syntax as above, using `PILE` conditions) that must \
 hold for the game to be considered won, e.g.:
- 
+
     AND
         PILE ALL COLUMN Empty
         PILE ALL DRAW Empty
- 
+
 # Worked examples
- 
+
 These are complete, valid files demonstrating different mechanics.
- 
+
 Free Cell -- no draw pile at all, simple `CELL`/`FOUNDATION`/`COLUMN` types:
- 
+
 ```sgdl
 Free Cell
- 
+
 $cards
 DECK 1 {SPADES, HEARTS, CLUBS, DIAMONDS}
- 
+
 $initial
 CELL 0
 CELL 0
@@ -249,7 +249,7 @@ COLUMN 6 FACE_ALL
 COLUMN 6 FACE_ALL
 COLUMN 6 FACE_ALL
 COLUMN 6 FACE_ALL
- 
+
 $moves
 MOVE {CELL, COLUMN} COLUMN
 OR
@@ -267,21 +267,21 @@ OR
     AND
         DESTSRC Suit match
         DESTSRC Rank ascending
- 
+
 $win
 AND
     PILE ALL COLUMN Empty
     PILE ALL CELL Empty
 ```
- 
+
 Klondike -- a ROTATE draw pile, and a MOVE_STACK with nested AND/OR:
- 
+
 ```sgdl
 Klondike
- 
+
 $cards
 DECK 1 {SPADES, HEARTS, CLUBS, DIAMONDS}
- 
+
 $initial
 DRAW 24 ROTATE 1 3 U
 FOUNDATION 0
@@ -295,7 +295,7 @@ COLUMN 4 FACE_LAST
 COLUMN 5 FACE_LAST
 COLUMN 6 FACE_LAST
 COLUMN 7 FACE_LAST
- 
+
 $moves
 MOVE {DRAW, COLUMN, FOUNDATION} COLUMN
 OR
@@ -324,22 +324,22 @@ AND
         AND
             DEST Empty
             SRC Rank K
- 
+
 $win
 AND
     PILE ALL COLUMN Empty
     PILE ALL DRAW Empty
 ```
- 
+
 Golf -- a DEAL draw feeding a single pile, and a wraparound (King-Ace) move written as \
 two literal-rank AND branches:
- 
+
 ```sgdl
 Golf
- 
+
 $cards
 DECK 1 {SPADES, HEARTS, CLUBS, DIAMONDS}
- 
+
 $initial
 DRAW 16 DEAL FOUNDATION
 FOUNDATION 1 FACE_ALL
@@ -350,7 +350,7 @@ COLUMN 5 FACE_ALL
 COLUMN 5 FACE_ALL
 COLUMN 5 FACE_ALL
 COLUMN 5 FACE_ALL
- 
+
 $moves
 MOVE COLUMN FOUNDATION
 OR
@@ -362,24 +362,24 @@ OR
     AND
         DEST Rank 1
         SRC Rank K
- 
+
 $win
 PILE ALL COLUMN Empty
 ```
- 
+
 Spider (single-suit) -- a DEAL draw feeding many piles at once, an optional DRAW \
 gating rule, and a MOVE_STACK straight to FOUNDATION with a fixed `Size == 13`:
- 
+
 ```sgdl
 Spider
- 
+
 $cards
 DECK 8 {SPADES}
 # 2-suit version
 # DECK 4 {SPADES, HEARTS}
 # 4-suit version
 # DECK 2 {SPADES, HEARTS, CLUBS, DIAMONDS}
- 
+
 $initial
 DRAW 50 DEAL COLUMN
 FOUNDATION 0
@@ -400,7 +400,7 @@ COLUMN 5 FACE_LAST
 COLUMN 5 FACE_LAST
 COLUMN 5 FACE_LAST
 COLUMN 5 FACE_LAST
- 
+
 $moves
 MOVE COLUMN COLUMN
 OR
@@ -421,15 +421,15 @@ AND
     DEST Empty
 DRAW
 PILE ALL COLUMN Size > 0
- 
+
 $win
 AND
     PILE ALL COLUMN Empty
     PILE ALL DRAW Empty
 ```
- 
+
 # Sanity checks before you finalize a file
- 
+
   - Every pile type used in `$moves`/`$win` is actually defined in `$initial`.
   - Initial pile counts (DRAW included) sum to exactly the total deck size -- \
     actually add them up (as in the worked examples above), don't estimate. If you \
@@ -442,15 +442,15 @@ AND
     `DRAW` as a source.
   - A DEAL-type draw pile has no redeal count; a ROTATE-type one has exactly three \
     numbers (draw count, view count, redeals).
- 
+
 # How your changes are evaluated
- 
+
 After each revision, an automated bot plays the resulting game from several \
 different random deals (shuffles) of the same SGDL file. The bot is intentionally \
 simple: it just tries legal moves more or less exhaustively and backtracks out of \
 repeated states, with no real strategy or lookahead. For each simulated deal you'll \
 be told:
- 
+
   - **Win** -- whether the bot found a sequence of moves that satisfies `$win`.
   - **Moves** -- if Win is true, the length of the winning sequence the bot \
     happened to find (not necessarily the shortest or most elegant one, since the \
@@ -470,36 +470,36 @@ be told:
     be trimmed or given a real role. On a loss, low usage is harder to interpret on \
     its own -- it could mean the same thing, or it could just mean the bot got \
     stuck early -- so read it together with Moves and Exhausted.
- 
+
 The bot's wins are a reliable lower bound (the deal is provably winnable), but its \
 losses are not always a reliable upper bound on difficulty, for the reasons above. \
 You're given results from several deals of the same file so you can look at patterns \
 across them (e.g. "wins every time with no variance" or "fails on most deals \
 immediately") rather than over-trusting any single one.
- 
+
 If a revision failed to compile or crashed during simulation, the SGDL you're shown \
 will likely contain comments describing the error, and the evaluation results may be \
 partial or entirely empty. Fixing whatever those comments describe takes priority \
 over any other change.
- 
+
 # Your response format
- 
+
 Think through the evaluation results (and the history, if shown) as much as you \
 need to. When you're ready, end your response with the complete, updated SGDL file -- \
 the whole file, not a diff or partial snippet -- in a single fenced code block tagged \
 `sgdl`, like this:
- 
+
 ```sgdl
 <the full file>
 ```
- 
+
 This fenced block must be the last thing in your response, and it must contain only \
 valid SGDL (genuine `#` comments are fine within it, but no prose outside of comments). \
 You can put a short, 1-3 sentence description of what you changed and why immediately \
 before the code block.
- 
+
 ## Optional: a design insight
- 
+
 Sometimes (you'll be told explicitly when this applies) you'll also be asked to \
 capture a short, general design insight from this particular round: a transferable \
 lesson suggested by the change you just made and its outcome, written so it would \
@@ -513,15 +513,15 @@ running out" rather than "I increased the redeal count this round." A sentence o
 is enough (a few short bullet points if there's more than one distinct lesson). When \
 asked for this, put it in its own fenced block tagged `insight`, placed right before \
 the final `sgdl` block:
- 
+
 ```insight
 <a sentence or two, or a few short bullet points>
 ```
- 
+
 ```sgdl
 <the full file>
 ```
- 
+
 If you weren't asked for an insight this round, just provide the `sgdl` block as \
 described above.
 '''
