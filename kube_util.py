@@ -7,6 +7,7 @@ import sys
 import time
 from random import Random
 import os
+from pathlib import Path
 
 pvc_name = "sgdl-evo-results"
 namespace = "design-reasoning-lab"
@@ -26,12 +27,12 @@ def get_seed(rnd: Random|None):
 def get_logger(name):
     return logging.getLogger(name)
 
-def setup_logging(log_path: str):
-    log_path = os.path.join("./nautilus-logs", log_path)
+def setup_logging(log_path: str|None):
     handlers: list[logging.Handler] = [logging.StreamHandler(sys.stdout)]
     
     if log_path is not None:
         os.makedirs(os.path.dirname(log_path), exist_ok=True)
+        print(f"Logging at {log_path}")
         handlers.append(logging.FileHandler(log_path))
     
     logging.basicConfig(level=logging.INFO, handlers=handlers, format="%(asctime)s [%(levelname)s] %(message)s")
@@ -230,6 +231,7 @@ def helper_exec(cmd: str, log: logging.Logger) -> str:
     return result.stdout
 
 def copy_from_pvc(remote_path: str, local_path: str, log: logging.Logger):
+    local_path = Path(local_path).as_posix()
     parent = os.path.dirname(local_path.rstrip("/")) or "."
     os.makedirs(parent, exist_ok=True)
     cmd = ["kubectl", "cp", "-n", namespace, f"{helper_pod_name}:{remote_path}", local_path]
@@ -240,6 +242,7 @@ def copy_from_pvc(remote_path: str, local_path: str, log: logging.Logger):
         raise RuntimeError(f"copy_from_pvc failed: {result.stderr.strip()}")
 
 def copy_to_pvc(local_path: str, remote_path: str, log: logging.Logger):
+    local_path = Path(local_path).as_posix()
     helper_exec(f"mkdir -p {remote_path}", log)
     cmd = ["kubectl", "cp", "-n", namespace, local_path, f"{helper_pod_name}:{remote_path}"]
     log.info(f"kubectl cp {local_path} (local) -> {remote_path} (pvc)")

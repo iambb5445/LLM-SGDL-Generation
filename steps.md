@@ -4,7 +4,7 @@ This is some step for using setting up requirements to run `orchestrate.py`, spe
 
 Define storage with:
 ```bash
-kubectl create -f k8s\pvc.yaml
+kubectl create -f pvc.yaml
 ```
 
 # Jobs

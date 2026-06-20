@@ -10,7 +10,7 @@ from kube_util import get_seed, setup_logging, get_logger, get_batch_client, get
     pvc_name, namespace, pvc_transfer_session, copy_from_pvc, copy_to_pvc
 from orchestrate import run_prep_job, run_eval_job, make_cleanup_job
 from llm_connect import OpenAIChat, DeepSeekChat, OpenAILib
-from prompt import system_message, get_prompt, process_response, get_skill_refinement_prompt, process_skill_refinement_response
+from prompt import system_message, skill_refinement_system_message, get_prompt, process_response, get_skill_refinement_prompt, process_skill_refinement_response
 from util import read_file, write_file, read_dict, write_dict
 import pandas as pd
 
@@ -22,46 +22,48 @@ repo_name = "sgdl"
 # llm_repo_url = "https://github.com/iambb5445/..."
 # llm_repo_name = "llm"
 
-llm_models: dict[str, Callable[[], OpenAILib]] = {
-    'gpt4o-mini': lambda: OpenAIChat(OpenAIChat.OpenAIModel.GPT_4O_mini, system_message),
-    'deepseek-r1': lambda: DeepSeekChat(DeepSeekChat.DeepSeekModel.DEEP_SEEK_REASONER, system_message),
+llm_models: dict[str, Callable[[str], OpenAILib]] = {
+    'gpt4o-mini': lambda sm: OpenAIChat(OpenAIChat.OpenAIModel.GPT_4O_mini, sm),
+    'deepseek-r1': lambda sm: DeepSeekChat(DeepSeekChat.DeepSeekModel.DEEP_SEEK_REASONER, sm),
     # TODO more
 }
 
-def ask_until_valid(chat: OpenAILib, prompt: str) -> str|None:
+def ask_until_valid(chat: OpenAILib, prompt: str) -> tuple[str|None, OpenAILib]:
     max_retries = 3
     while True:
         try:
-            response = chat.copy().ask(prompt)
-            return response
+            chat_copy = chat.copy()
+            response = chat_copy.ask(prompt)
+            return response, chat_copy
         except Exception as e:
             print(f"ERROR, retrying: {e}")
             max_retries -= 1
             if max_retries == 0:
                 print("No retries left. No GDL was created.")
-                return None
+                return None, chat
 
 def get_prev_filename(local_workdir, curr_filename: str, prev_gen: int):
     prev_mapping = read_dict([local_workdir, f"g{prev_gen}"], "mapping.json")
     return prev_mapping[curr_filename]
 
 def get_name_from_filename(filename: str):
-    return filename.split("_")[-1].split(".")[0]
+    return filename.split("_")[1]
 
 def get_lineage(gen: int, filename: str, history_count: int, local_workdir: str):
     data: list[tuple[str, pd.DataFrame]] = []
     filename_iterator = filename
     for i in range(gen - 1, max(0, gen - (history_count + 1)) - 1, -1):
-        filename_iterator = get_prev_filename(local_workdir, filename_iterator, i)
         sgdl_of_past = read_file([local_workdir, f"g{i}"], filename_iterator)
         name = get_name_from_filename(filename_iterator)
-        eval = pd.read_csv(os.path.join(local_workdir, f"g{i}", "history.csv")).groupby("name").get_group(name)
+        eval = pd.read_csv(os.path.join(local_workdir, f"g{i}", "evaluation.csv")).groupby("Game").get_group(name)
         data.append((sgdl_of_past, eval))
+        if i > 0:
+            filename_iterator = get_prev_filename(local_workdir, filename_iterator, i)
     data.reverse()
     return data
 
 def prep_llm(gen: int, results_dir: str, local_workdir: str, model: str, history_count: int,
-             skill: bool, log: logging.Logger, core_api: client.CoreV1Api) -> bool:
+             skill: bool, log_dir: str, log: logging.Logger, core_api: client.CoreV1Api) -> bool:
     g_prev = f"{results_dir}/g{gen - 1}"
     g_curr = f"{results_dir}/g{gen}"
     local_prev = os.path.join(local_workdir, f"g{gen - 1}")
@@ -77,12 +79,12 @@ def prep_llm(gen: int, results_dir: str, local_workdir: str, model: str, history
     insights: list[str] = []
     prev_skill_filename = os.path.join(local_prev, "skill.md") if skill else None
     for index, filename in enumerate(filenames):
-        chat: OpenAILib = llm_models[model]()
+        chat: OpenAILib = llm_models[model](system_message)
         lineage = get_lineage(gen, filename, history_count, local_workdir)
         user_messages, assistant_messages, prompt = get_prompt(lineage, prev_skill_filename)
         for um, am in zip(user_messages, assistant_messages):
             chat.inject(um, am)
-        response = ask_until_valid(chat, prompt)
+        response, used_chat = ask_until_valid(chat, prompt)
         sgdl, insight = None, None
         if response is not None:
             sgdl, insight = process_response(response)
@@ -90,15 +92,17 @@ def prep_llm(gen: int, results_dir: str, local_workdir: str, model: str, history
             insights.append(insight)
         name = get_name_from_filename(filename)
         new_filename = f"{index}_{name}.sgdl"
-        mapping[filename] = new_filename
-        write_file(local_curr, f"{index}_{name}.sgdl", sgdl if sgdl is not None else lineage[0][0])
+        mapping[new_filename] = filename
+        write_dict(log_dir, f"g{gen}_{index}_{name}.log", used_chat.chat_log)
+        write_file(local_curr, f"{index}_{name}.sgdl", sgdl if sgdl is not None else lineage[-1][0])
     
     if skill:
         skill_prompt = get_skill_refinement_prompt(prev_skill_filename, insights)
-        chat = llm_models[model]()
-        refinement = ask_until_valid(chat, skill_prompt)
+        chat = llm_models[model](skill_refinement_system_message)
+        refinement, skill_chat = ask_until_valid(chat, skill_prompt)
         skill_content = process_skill_refinement_response(refinement) if refinement is not None else None
         prev_skill = read_file(local_prev, "skill.md")
+        write_dict(log_dir, f"g{gen}_skill.log", skill_chat.chat_log)
         write_file(local_curr, "skill.md", skill_content if skill_content is not None else prev_skill)
 
     write_dict(local_curr, "mapping.json", mapping)
@@ -127,7 +131,9 @@ def main():
     args = parser.parse_args()
     variant = args.variant
     timestamp = int(time.time())
-    results_dir = args.results_dir if args.results_dir else f"/results{('-' + variant) if variant else ''}/{timestamp}"
+    results_dir = args.results_dir if args.results_dir else f"results{('-' + variant) if variant else ''}/{timestamp}"
+    log_dir = f"./logs/{results_dir}"
+    os.makedirs(os.path.dirname(log_dir), exist_ok=True)
     results_dir = f"/mnt/{results_dir}"
     start_gen = args.start_gen
     end_gen = args.end_gen
@@ -142,7 +148,7 @@ def main():
     expr_seed: int = args.seed if args.seed is not None else get_seed(None)
     experiment_rnd = Random(expr_seed)
 
-    setup_logging(f"{results_dir}/orchestrator.log")
+    setup_logging(os.path.join(log_dir, "orchestrate.log"))
     log = get_logger(__name__)
 
     batch_api = get_batch_client()
@@ -168,7 +174,7 @@ def main():
             ok = run_prep_job(gen, Random(gen_seed), results_dir, variant, population_size,
                               0, 0, 0, 0, 0, batch_api, log)
         else:
-            ok = prep_llm(gen, results_dir, local_workdir, llm_model, llm_history, skill, log, core_api)
+            ok = prep_llm(gen, results_dir, local_workdir, llm_model, llm_history, skill, log_dir, log, core_api)
 
         if not ok:
             log.error(f"Prep job for gen {gen} failed. Exiting.")

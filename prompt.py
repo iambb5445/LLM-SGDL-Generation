@@ -2,7 +2,6 @@
 
 import re
 from pathlib import Path
-from typing import NamedTuple
 
 import pandas as pd
 
