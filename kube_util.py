@@ -234,6 +234,7 @@ def copy_from_pvc(remote_path: str, local_path: str, log: logging.Logger):
     local_path = Path(local_path).as_posix()
     parent = os.path.dirname(local_path.rstrip("/")) or "."
     os.makedirs(parent, exist_ok=True)
+    # contrary to copy_to_pvc, this doesn't need /.
     cmd = ["kubectl", "cp", "-n", namespace, f"{helper_pod_name}:{remote_path}", local_path]
     log.info(f"kubectl cp {remote_path} (pvc) -> {local_path} (local)")
     result = subprocess.run(cmd, capture_output=True, text=True)
@@ -244,6 +245,7 @@ def copy_from_pvc(remote_path: str, local_path: str, log: logging.Logger):
 def copy_to_pvc(local_path: str, remote_path: str, log: logging.Logger):
     local_path = Path(local_path).as_posix()
     helper_exec(f"mkdir -p {remote_path}", log)
+    local_path = f"{local_path}/." # otherwise this will also copy the folder itself
     cmd = ["kubectl", "cp", "-n", namespace, local_path, f"{helper_pod_name}:{remote_path}"]
     log.info(f"kubectl cp {local_path} (local) -> {remote_path} (pvc)")
     result = subprocess.run(cmd, capture_output=True, text=True)
