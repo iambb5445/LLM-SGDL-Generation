@@ -86,15 +86,14 @@ def make_cleanup_job(batch_api: client.BatchV1Api, gen: int, results_dir: str, v
     image = Images.jupyter if build_history else Images.python
 
     if build_history:
-        g_prev = f"{results_dir}/g{gen - 1}"
         repo_path = get_repo_path(repo_name)
         skill_flag = " --skill" if skill else ""
         history_cmd = (
             f"cd {repo_path} && python job_scripts/make_llm_history.py "
-            f"{gen_dir} --ignore-non-existent --prev-dir {g_prev} "
+            f"{gen_dir} --ignore-non-existent --prev-dir {gen_dir} "
         )
         history_cmd += f"--included-history {history_count}{skill_flag}" if not oneshot else "--oneshot"
-        validate_cmd = f"python job_scripts/validate.py {g_prev}"
+        validate_cmd = f"python job_scripts/validate.py {gen_dir}"
         commands += [history_cmd, validate_cmd]
 
     job = make_job(job_name, image, commands)
