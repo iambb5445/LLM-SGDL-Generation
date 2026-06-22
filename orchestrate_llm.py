@@ -57,7 +57,8 @@ def get_lineage(gen: int, filename: str, history_count: int, local_workdir: str)
     for i in range(gen - 1, max(0, gen - (history_count + 1)) - 1, -1):
         sgdl_of_past = read_file([local_workdir, f"g{i}"], filename_iterator)
         name = get_name_from_filename(filename_iterator)
-        eval = pd.read_csv(os.path.join(local_workdir, f"g{i}", "evaluation.csv")).groupby("Game").get_group(name)
+        grouped_data = pd.read_csv(os.path.join(local_workdir, f"g{i}", "evaluation.csv")).groupby("Game")
+        eval = grouped_data.get_group(name) if name in grouped_data.groups else pd.DataFrame()
         data.append((sgdl_of_past, eval))
         if i > 0:
             filename_iterator = get_prev_filename(local_workdir, filename_iterator, i)
