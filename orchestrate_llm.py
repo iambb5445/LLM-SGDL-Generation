@@ -104,9 +104,13 @@ def prep_llm(gen: int, results_dir: str, local_workdir: str, model: str, history
         chat = llm_models[model](skill_refinement_system_message)
         refinement, skill_chat = ask_until_valid(chat, skill_prompt)
         skill_content = process_skill_refinement_response(refinement) if refinement is not None else None
-        prev_skill = read_file(local_prev, "skill.md")
         write_dict(log_dir, f"g{gen}_skill.log", skill_chat.chat_log)
-        write_file(local_curr, "skill.md", skill_content if skill_content is not None else prev_skill)
+        if skill_content is None and gen > 1: # gen0 doesn't have skill.md
+            prev_skill = read_file(local_prev, "skill.md")
+            skill_content = prev_skill
+        if skill_content is not None:
+            # if skill_content is None, no skill file will be made. Future generation will make one from insights.
+            write_file(local_curr, "skill.md", skill_content)
 
     write_dict(local_curr, "mapping.json", mapping)
 
@@ -197,6 +201,13 @@ def main():
         log.info(f"Generation {gen} done.")
 
     log.info("All generations complete!")
+
+    # download final generation to local_workdir so I can easily browse them
+    final_remote = f"{results_dir}/g{end_gen}"
+    final_local = os.path.join(local_workdir, f"g{end_gen}")
+    with pvc_transfer_session(core_api, log):
+        log.info(f"Downloading final generation {end_gen} -> {final_local}")
+        copy_from_pvc(final_remote, final_local, log)
 
 
 if __name__ == "__main__":
