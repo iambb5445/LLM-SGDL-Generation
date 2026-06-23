@@ -112,9 +112,23 @@ def submit_job(batch_api: client.BatchV1Api, job: client.V1Job, log: logging.Log
         time.sleep(8)
     except Exception:
         pass
-    batch_api.create_namespaced_job(namespace=namespace, body=job)
+    _create_job_with_retry(batch_api, job, log)
     log.info(f"Submitted job: {name}")
 
+def _create_job_with_retry(batch_api: client.BatchV1Api, job: client.V1Job, log: logging.Logger):
+    name = job.metadata.name if job.metadata is not None else None
+    delay = 2
+    for attempt in range(5):
+        try:
+            batch_api.create_namespaced_job(namespace=namespace, body=job)
+            return
+        except ApiException as e:
+            if e.status == 429 and attempt < 4: # on attempt 4 we want the error to be propagated
+                log.warning(f"Rate limited on job '{name}', retrying in {delay}s (attempt {attempt + 1}/5)")
+                time.sleep(delay)
+                delay *= 2
+            else:
+                raise e
 
 def wait_for_job(batch_api: client.BatchV1Api, job_name: str, log: logging.Logger, poll_interval: int=20):
     log.info(f"Waiting for '{job_name}'...")
