@@ -9,6 +9,8 @@ from kube_util import get_seed, setup_logging, get_logger, get_batch_client, run
 
 repo_url = "https://github.com/iambb5445/SolitaireGDL"
 repo_name = "sgdl"
+move_cap = 2000
+game_count = 10
 
 def make_eval_job(job_name: str, seed: int, gen_dir: str, num_workers: int):
     repo_path = get_repo_path(repo_name)
@@ -19,7 +21,7 @@ def make_eval_job(job_name: str, seed: int, gen_dir: str, num_workers: int):
     cmd = (
         # "pip install 'pandas==2.2.3' -q && "
         f"cd {repo_path} && "
-        f"pypy3 job_scripts/evaluate.py {gen_dir} "
+        f"pypy3 job_scripts/evaluate.py {gen_dir} {move_cap} {game_count} "
         f"--seed {seed} --ignore-errors --should-log "
         f"--worker-index $JOB_COMPLETION_INDEX --worker-count {num_workers}"
     )
@@ -69,6 +71,7 @@ def make_eval_job(job_name: str, seed: int, gen_dir: str, num_workers: int):
 def make_cleanup_job(batch_api: client.BatchV1Api, gen: int, results_dir: str, variant: str|None, log: logging.Logger,
                      build_history: bool = False, oneshot: bool = False, history_count: int = 0, skill: bool = False):
     gen_dir = f"{results_dir}/g{gen}"
+    prev_dir = f"{results_dir}/g{gen-1}"
     job_name = f"sgdl-evo-merge-g{gen}{('-' + variant) if variant else ''}"
 
     merge_cmd = (
@@ -90,7 +93,7 @@ def make_cleanup_job(batch_api: client.BatchV1Api, gen: int, results_dir: str, v
         skill_flag = " --skill" if skill else ""
         history_cmd = (
             f"cd {repo_path} && python job_scripts/make_llm_history.py "
-            f"{gen_dir} --ignore-non-existent --prev-dir {gen_dir} "
+            f"{gen_dir} --ignore-non-existent --prev-dir {prev_dir} "
         )
         history_cmd += f"--included-history {history_count}{skill_flag}" if not oneshot else "--oneshot"
         validate_cmd = f"python job_scripts/validate.py {gen_dir}"
@@ -179,11 +182,11 @@ def main():
     parser.add_argument("--population-size", type=int, default=100, help="Number of games per generation (including games that are already good, mutated and crossovered games, and the rest filled with random games)")
     parser.add_argument("--mutation-count", type=int, default=20, help="How many games per generation are created using mutation (will not generate anything if there is not at least 1 good parent available)")
     parser.add_argument("--crossover-count", type=int, default=20, help="How many games per generation are created using crossover (will not generate anything if there are not at least 2 good parents available)")
-    parser.add_argument("--max-copied-count", type=int, default=30, help="How many games per generation are good games copied from previous generation")
+    parser.add_argument("--max-copied-count", type=int, default=20, help="How many games per generation are good games copied from previous generation")
     parser.add_argument("--max-mutations-per-game", type=int, default=1, help="Maximum number of mutations per game, to avoid mutating a few games many times and diluting the next generation.")
     parser.add_argument("--max-crossover-per-game", type=int, default=1, help="Maximum number of crossover per game, to avoid mutating a few games many times and diluting the next generation.")
     parser.add_argument("--eval-workers", type=int, default=10, help="Number of workers used to parallelize evaluation process.")
-    parser.add_argument("--variant", type="str", default="", help="Optional name suffix for job names (e.g. 'llm', 'llm-skil')")
+    parser.add_argument("--variant", type=str, default="", help="Optional name suffix for job names (e.g. 'llm', 'llm-skil')")
 
     args = parser.parse_args()
     variant = args.variant
