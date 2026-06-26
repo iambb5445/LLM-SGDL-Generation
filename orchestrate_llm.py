@@ -24,6 +24,7 @@ repo_name = "sgdl"
 
 llm_models: dict[str, Callable[[str], OpenAILib]] = {
     'gpt4o-mini': lambda sm: OpenAIChat(OpenAIChat.OpenAIModel.GPT_4O_mini, sm),
+    'gpt5.4': lambda sm: OpenAIChat(OpenAIChat.OpenAIModel.GPT_54, sm),
     'deepseek-r1': lambda sm: DeepSeekChat(DeepSeekChat.DeepSeekModel.DEEP_SEEK_REASONER, sm),
     # TODO more
 }
@@ -170,6 +171,11 @@ def main():
     log.info(f"Namespace: {namespace} | PVC: {pvc_name} | Variant: {variant}")
     log.info(f"Results at {results_dir} | Local Workdir {local_workdir}")
     log.info("=" * 50)
+
+    # synchronize experiment rnd
+    for gen in range(0, args.start_gen):
+        gen_seed = get_seed(experiment_rnd)
+        eval_seed = get_seed(experiment_rnd)
 
     for gen in range(args.start_gen, args.end_gen + 1):
         log.info(f"\n--- Generation {gen} ---")
