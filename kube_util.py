@@ -8,6 +8,8 @@ import time
 from random import Random
 import os
 from pathlib import Path
+from typing import Callable, TypeVar
+from typing import ParamSpec
 
 pvc_name = "sgdl-evo-results"
 namespace = "design-reasoning-lab"
@@ -47,6 +49,23 @@ def get_core_client() -> client.CoreV1Api:
 
 def get_repo_path(repo_name) -> str:
     return f"/mnt/{repo_name}"
+
+P = ParamSpec("P")
+R = TypeVar("R")
+
+def _api_call_with_retry(fn: Callable[P, R], log: logging.Logger, attempts: int=7, *args: P.args, **kwargs: P.kwargs) -> R:
+    delay = 2
+    for attempt in range(attempts):
+        try:
+            return fn(*args, **kwargs)
+        except ApiException as e:
+            if e.status == 429:
+                log.warning(f"Rate limited on '{fn.__name__}', retrying in {delay}s (attempt {attempt + 1}/{attempts})")
+                time.sleep(delay)
+                delay *= 2
+            else:
+                raise
+    raise ApiException(f"Still rate limited after {attempts} attempts on '{fn.__name__}'")
 
 def run_setup_git(batch_api: client.BatchV1Api, repo_url: str, repo_name: str, log: logging.Logger):
     job_name = "sgdl-evo-pull-git"
@@ -104,36 +123,22 @@ def submit_job(batch_api: client.BatchV1Api, job: client.V1Job, log: logging.Log
     name: str = job.metadata.name
     # delete previous job with same name if it exists (bc of retries)
     try:
-        batch_api.delete_namespaced_job(
+        _api_call_with_retry(batch_api.delete_namespaced_job, log, 
             name=name, namespace=namespace,
             body=client.V1DeleteOptions(propagation_policy="Foreground"),
         )
         log.info(f"Deleted existing job '{name}', waiting for cleanup...")
         time.sleep(8)
-    except Exception:
-        pass
-    _create_job_with_retry(batch_api, job, log)
+    except ApiException as e:
+        if e.status != 404:
+            raise
+    _api_call_with_retry(batch_api.create_namespaced_job, log, namespace=namespace, body=job)
     log.info(f"Submitted job: {name}")
-
-def _create_job_with_retry(batch_api: client.BatchV1Api, job: client.V1Job, log: logging.Logger):
-    name = job.metadata.name if job.metadata is not None else None
-    delay = 2
-    for attempt in range(5):
-        try:
-            batch_api.create_namespaced_job(namespace=namespace, body=job)
-            return
-        except ApiException as e:
-            if e.status == 429 and attempt < 4: # on attempt 4 we want the error to be propagated
-                log.warning(f"Rate limited on job '{name}', retrying in {delay}s (attempt {attempt + 1}/5)")
-                time.sleep(delay)
-                delay *= 2
-            else:
-                raise e
 
 def wait_for_job(batch_api: client.BatchV1Api, job_name: str, log: logging.Logger, poll_interval: int=20):
     log.info(f"Waiting for '{job_name}'...")
     while True:
-        job = batch_api.read_namespaced_job(name=job_name, namespace=namespace)
+        job = _api_call_with_retry(batch_api.read_namespaced_job, log, name=job_name, namespace=namespace)
         assert isinstance(job, client.V1Job)
         spec_completions = (job.spec.completions if job.spec else None) or 1
         backoff_limit = (job.spec.backoff_limit if job.spec else None) or 0
@@ -176,30 +181,30 @@ def _make_pvc_helper_pod() -> client.V1Pod:
         spec=pod_spec,
     )
 
-def _get_pvc_helper_phase(core_api: client.CoreV1Api) -> str|None:
-    pod = core_api.read_namespaced_pod(name=helper_pod_name, namespace=namespace)
+def _get_pvc_helper_phase(core_api: client.CoreV1Api, log: logging.Logger) -> str|None:
+    pod = _api_call_with_retry(core_api.read_namespaced_pod, log, name=helper_pod_name, namespace=namespace)
     assert isinstance(pod, client.V1Pod)
     phase = pod.status.phase if pod.status else None
     return phase
 
 def ensure_pvc_helper(core_api: client.CoreV1Api, log: logging.Logger, timeout: int = 120):
     try:
-        phase = _get_pvc_helper_phase(core_api)
+        phase = _get_pvc_helper_phase(core_api, log)
         if phase == "Running":
             return
         log.info(f"{helper_pod_name} exists but is {phase}. Recreating.")
-        core_api.delete_namespaced_pod(name=helper_pod_name, namespace=namespace)
+        _api_call_with_retry(core_api.delete_namespaced_pod, log, name=helper_pod_name, namespace=namespace)
         time.sleep(3)
     except ApiException as e:
         if e.status != 404: # 404 is when pod doesn't exist
             raise
 
     log.info(f"Creating PVC helper pod {helper_pod_name}")
-    core_api.create_namespaced_pod(namespace=namespace, body=_make_pvc_helper_pod())
+    _api_call_with_retry(core_api.create_namespaced_pod, log, namespace=namespace, body=_make_pvc_helper_pod())
 
     start_time = time.time()
     while True:
-        phase = _get_pvc_helper_phase(core_api)
+        phase = _get_pvc_helper_phase(core_api, log)
         if phase == "Running":
             log.info(f"{helper_pod_name} is running.")
             return
@@ -209,7 +214,7 @@ def ensure_pvc_helper(core_api: client.CoreV1Api, log: logging.Logger, timeout: 
 
 def teardown_pvc_helper(core_api: client.CoreV1Api, log: logging.Logger, timeout: int = 30):
     try:
-        core_api.delete_namespaced_pod(name=helper_pod_name, namespace=namespace, grace_period_seconds=0)
+        _api_call_with_retry(core_api.delete_namespaced_pod, log, name=helper_pod_name, namespace=namespace, grace_period_seconds=0)
         log.info(f"Deleted PVC helper pod {helper_pod_name}.")
     except ApiException as e:
         if e.status != 404:
@@ -219,7 +224,7 @@ def teardown_pvc_helper(core_api: client.CoreV1Api, log: logging.Logger, timeout
     start_time = time.time()
     while time.time() - start_time < timeout:
         try:
-            core_api.read_namespaced_pod(name=helper_pod_name, namespace=namespace)
+            _api_call_with_retry(core_api.read_namespaced_pod, log, name=helper_pod_name, namespace=namespace)
         except ApiException as e:
             if e.status == 404:
                 return
