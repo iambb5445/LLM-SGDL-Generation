@@ -2,6 +2,7 @@ import argparse
 import logging
 from kubernetes import client
 import sys
+import os
 import time
 from random import Random
 from kube_util import get_seed, setup_logging, get_logger, get_batch_client, run_setup_git, \
@@ -135,7 +136,7 @@ def run_prep_job(gen: int, rnd: Random, results_dir: str, variant: str, populati
             f"mkdir -p {g_curr} {g_best}",
 
             f"cd {repo_path} && {run_command} job_scripts/choose_best.py "
-            f"{eval_csv} {g_prev} {g_best} --ignore-non-existent --index-from-existing",
+            f"{eval_csv} {g_prev} {g_best} {move_cap} --ignore-non-existent --index-from-existing",
 
             f"{run_command} job_scripts/copy_best.py "
             f"{g_best} {max_copied_count} {g_curr} --seed {copy_best_seed} --index-from-existing",
@@ -191,7 +192,9 @@ def main():
     args = parser.parse_args()
     variant = args.variant
     timestamp = int(time.time())
-    results_dir = args.results_dir if args.results_dir else f"/results{('-' + variant) if variant else ''}/{timestamp}"
+    results_dir = args.results_dir if args.results_dir else f"results{('-' + variant) if variant else ''}/{timestamp}"
+    log_dir = f"./logs/{results_dir}"
+    os.makedirs(os.path.dirname(log_dir), exist_ok=True)
     results_dir = f"/mnt/{results_dir}"
     start_gen = args.start_gen
     end_gen = args.end_gen
@@ -205,7 +208,7 @@ def main():
     expr_seed: int = args.seed if args.seed is not None else get_seed(None)
     experiment_rnd = Random(expr_seed)
 
-    setup_logging(f"{results_dir}/orchestrator.log")
+    setup_logging(os.path.join(log_dir, "orchestrate.log"))
     log = get_logger(__name__)
 
     batch_api = get_batch_client()
