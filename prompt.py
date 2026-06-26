@@ -2,10 +2,11 @@
 
 import re
 from pathlib import Path
+from orchestrate import move_cap
 
 import pandas as pd
 
-system_message = '''\
+system_message = f'''\
 You are an expert solitaire game designer and rules engineer. You are iteratively \
 redesigning a single-player card game described in a small custom format called \
 SGDL (Solitaire Game Description Language). At each step you are given the current \
@@ -42,10 +43,10 @@ The first line of the file is just the game's name, e.g. `Klondike`.
 ## $cards
 
 One line: `DECK <count> <suits>`, where `<count>` is how many copies of the suit set \
-are shuffled together (a normal 52-card single-suited deck is `DECK 1 {SPADES, HEARTS, \
-CLUBS, DIAMONDS}`), and `<suits>` is a suit or a `{comma-separated set}` drawn from \
+are shuffled together (a normal 52-card single-suited deck is `DECK 1 {{SPADES, HEARTS, \
+CLUBS, DIAMONDS}}`), and `<suits>` is a suit or a `{{comma-separated set}}` drawn from \
 SPADES, HEARTS, CLUBS, DIAMONDS. Every suit always contributes ranks A(1) through K(13). \
-A single-suit, 8-deck spider-style setup would be `DECK 8 {SPADES}` (8 x 13 = 104 cards).
+A single-suit, 8-deck spider-style setup would be `DECK 8 {{SPADES}}` (8 x 13 = 104 cards).
 
 ## $initial
 
@@ -93,10 +94,10 @@ in the deck must start somewhere -- and it is exact, not approximate: even being
 by one card will fail to compile.
 
 Work the arithmetic out explicitly rather than eyeballing it. For example, Free Cell's \
-deck is `DECK 1 {SPADES, HEARTS, CLUBS, DIAMONDS}` = 1 x 13 x 4 = 52 cards, and its \
+deck is `DECK 1 {{SPADES, HEARTS, CLUBS, DIAMONDS}}` = 1 x 13 x 4 = 52 cards, and its \
 piles are four 0-card `CELL`s, four 0-card `FOUNDATION`s, four 7-card `COLUMN`s and \
 four 6-card `COLUMN`s: 0+0+0+0 + 0+0+0+0 + 7+7+7+7 + 6+6+6+6 = 52. Spider's deck is \
-`DECK 8 {SPADES}` = 8 x 13 x 1 = 104 cards, and its piles are a 50-card `DRAW`, eight \
+`DECK 8 {{SPADES}}` = 8 x 13 x 1 = 104 cards, and its piles are a 50-card `DRAW`, eight \
 0-card `FOUNDATION`s, four 6-card `COLUMN`s and six 5-card `COLUMN`s: 50 + 0*8 + 6*4 + \
 5*6 = 50 + 0 + 24 + 30 = 104.
 
@@ -208,7 +209,7 @@ For `DRAW` and `$win` (and, rarely, usable in `MOVE`/`MOVE_STACK` too):
     PILE ANY <pile types> Empty
 
 `<op>` is one of `==`, `!=`, `<`, `<=`, `>`, `>=`. `<suits>`/`<ranks>` can be a single \
-value or a `{comma-separated set}`, e.g. `SRC Rank {1, K}` for "ace or king." Ranks are \
+value or a `{{comma-separated set}}`, e.g. `SRC Rank {{1, K}}` for "ace or king." Ranks are \
 written as `1, 2, ..., 10, J, Q, K`.
 
 ## $win
@@ -230,7 +231,7 @@ Free Cell -- no draw pile at all, simple `CELL`/`FOUNDATION`/`COLUMN` types:
 Free Cell
 
 $cards
-DECK 1 {SPADES, HEARTS, CLUBS, DIAMONDS}
+DECK 1 {{SPADES, HEARTS, CLUBS, DIAMONDS}}
 
 $initial
 CELL 0
@@ -251,7 +252,7 @@ COLUMN 6 FACE_ALL
 COLUMN 6 FACE_ALL
 
 $moves
-MOVE {CELL, COLUMN} COLUMN
+MOVE {{CELL, COLUMN}} COLUMN
 OR
     AND
         DESTSRC Rank descending
@@ -280,7 +281,7 @@ Klondike -- a ROTATE draw pile, and a MOVE_STACK with nested AND/OR:
 Klondike
 
 $cards
-DECK 1 {SPADES, HEARTS, CLUBS, DIAMONDS}
+DECK 1 {{SPADES, HEARTS, CLUBS, DIAMONDS}}
 
 $initial
 DRAW 24 ROTATE 1 3 U
@@ -297,7 +298,7 @@ COLUMN 6 FACE_LAST
 COLUMN 7 FACE_LAST
 
 $moves
-MOVE {DRAW, COLUMN, FOUNDATION} COLUMN
+MOVE {{DRAW, COLUMN, FOUNDATION}} COLUMN
 OR
     AND
         DESTSRC Suit alternate_color
@@ -305,7 +306,7 @@ OR
     AND
         DEST Empty
         SRC Rank K
-MOVE {COLUMN, DRAW} FOUNDATION
+MOVE {{COLUMN, DRAW}} FOUNDATION
 OR
     AND
         DEST Empty
@@ -338,7 +339,7 @@ two literal-rank AND branches:
 Golf
 
 $cards
-DECK 1 {SPADES, HEARTS, CLUBS, DIAMONDS}
+DECK 1 {{SPADES, HEARTS, CLUBS, DIAMONDS}}
 
 $initial
 DRAW 16 DEAL FOUNDATION
@@ -374,11 +375,11 @@ gating rule, and a MOVE_STACK straight to FOUNDATION with a fixed `Size == 13`:
 Spider
 
 $cards
-DECK 8 {SPADES}
+DECK 8 {{SPADES}}
 # 2-suit version
-# DECK 4 {SPADES, HEARTS}
+# DECK 4 {{SPADES, HEARTS}}
 # 4-suit version
-# DECK 2 {SPADES, HEARTS, CLUBS, DIAMONDS}
+# DECK 2 {{SPADES, HEARTS, CLUBS, DIAMONDS}}
 
 $initial
 DRAW 50 DEAL COLUMN
@@ -455,11 +456,11 @@ be told:
   - **Moves** -- if Win is true, the length of the winning sequence the bot \
     happened to find (not necessarily the shortest or most elegant one, since the \
     bot isn't optimal). If Win is false, this is how much the bot searched before \
-    giving up: either it hit a 1000-move search cap, or it fully explored every \
+    giving up: either it hit a {move_cap}-move search cap, or it fully explored every \
     state reachable from the deal and confirmed no win exists. A search that's \
-    *fully* exhausted well under 1000 moves (especially close to 0) is strong \
+    *fully* exhausted well under {move_cap} moves (especially close to 0) is strong \
     evidence the deal is a genuine dead end, not just a hard one; hitting the \
-    1000-move cap is much weaker evidence, since a cleverer search might still find \
+    {move_cap}-move cap is much weaker evidence, since a cleverer search might still find \
     a win the bot didn't reach in time.
   - **Exhausted** -- true whenever no win was found (whether by hitting the cap or \
     by fully exploring the state space); false whenever a win was found.
@@ -543,7 +544,7 @@ def _read_skill(skill_filename: str | None) -> str | None:
     if not skill_filename:
         return None
     try:
-        content = Path(skill_filename).read_text().strip()
+        content = Path(skill_filename).read_text(encoding="utf-8").strip()
     except OSError:
         return None
     return content or None
@@ -611,12 +612,12 @@ def _eval_section(eval_df: pd.DataFrame | None) -> str:
         )
     if len(losses) > 0:
         dead_on_arrival = int((losses["Move Count"] == 0).sum())
-        capped = int((losses["Move Count"] >= 1000).sum())
+        capped = int((losses["Move Count"] >= move_cap).sum())
         bit = f"Among losses: avg search length {losses['Move Count'].mean():.1f} moves"
         if dead_on_arrival:
             bit += f", {dead_on_arrival} had zero legal moves from the start"
         if capped:
-            bit += f", {capped} hit the 1000-move search cap (inconclusive)"
+            bit += f", {capped} hit the {move_cap}-move search cap (inconclusive)"
         summary_bits.append(bit + ".")
 
     return f"{table}\n\n{' '.join(summary_bits)}"
