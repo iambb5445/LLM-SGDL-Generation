@@ -23,9 +23,9 @@ repo_name = "sgdl"
 # llm_repo_name = "llm"
 
 llm_models: dict[str, Callable[[str], OpenAILib]] = {
-    'gpt4o-mini': lambda sm: OpenAIChat(OpenAIChat.OpenAIModel.GPT_4O_mini, sm),
-    'gpt5.4': lambda sm: OpenAIChat(OpenAIChat.OpenAIModel.GPT_54, sm),
-    'deepseek-r1': lambda sm: DeepSeekChat(DeepSeekChat.DeepSeekModel.DEEP_SEEK_REASONER, sm),
+    'gpt4o-mini': lambda sm: OpenAIChat(OpenAIChat.OpenAIModel.GPT_4O_mini, sm, raise_error=True),
+    'gpt5.4': lambda sm: OpenAIChat(OpenAIChat.OpenAIModel.GPT_54, sm, raise_error=True),
+    'deepseek-r1': lambda sm: DeepSeekChat(DeepSeekChat.DeepSeekModel.DEEP_SEEK_REASONER, sm, raise_error=True),
     # TODO more
 }
 

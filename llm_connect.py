@@ -14,7 +14,7 @@ class LLMConnector:
     last_call_timestamp: dict[str, float] = {}
     tokens_used_this_minute: dict[str, int] = {}
     requests_used_this_minute: dict[str, int] = {}
-    def __init__(self, model_identifier: str):
+    def __init__(self, model_identifier: str, raise_errors: bool):
         print(f"Connector made for model {model_identifier}")
         self.model_identifier = model_identifier
     
@@ -73,11 +73,12 @@ class OpenAILib(LLMConnector):
     def get_client(self) -> openai.OpenAI:
         raise Exception(f"Abstract class does not implement get_client")
     
-    def __init__(self, model_name: str, system_message: str|None=None, chat_format=True):
+    def __init__(self, model_name: str, system_message: str|None=None, chat_format: bool=True, raise_error: bool=False):
         self.model_name = model_name
         self.chat_format = chat_format
         self.chat_log = [] if system_message is None else [{"role": "system", "content": system_message}]
-        super().__init__(model_name)
+        self.raise_error = raise_error
+        super().__init__(model_name, raise_error)
 
     def copy(self) -> OpenAILib:
         raise Exception(f"Abstract class does not implement copy")
@@ -95,18 +96,22 @@ class OpenAILib(LLMConnector):
             import random
             print(f"\n(rate) nClient Exception:\n{e}")
             time.sleep(random.randint(30, 90))
+            if self.raise_error: raise e
             return 0, ""
         except openai.APITimeoutError as e:
             print(f"\n(timeout) Client Exception:\n{e}")
             time.sleep(10)
+            if self.raise_error: raise e
             return 0, ""
         except openai.APIStatusError as e:
             print(f"\n(status) Client Exception:\n{e}")
             time.sleep(10)
+            if self.raise_error: raise e
             return 0, ""
         except Exception as e: # some errors here seem to be from the library. e.g. APIConnectionError.__init__() takes 1 positional argument but 2 were given
             print(f"\nClient Exception:\n{e}")
             time.sleep(10)
+            if self.raise_error: raise e
             return 0, ""
         tokens_used = int(response.usage.total_tokens)
         response_text = response.choices[0].message.content
@@ -156,11 +161,11 @@ class OpenAIChat(OpenAILib):
         OpenAIModel.GPT_54: 4000000,
     }
     CLIENT = None
-    def __init__(self, openAI_model:OpenAIChat.OpenAIModel, system_message: str|None=None, chat_format=True):
+    def __init__(self, openAI_model:OpenAIChat.OpenAIModel, system_message: str|None=None, chat_format: bool=True, raise_error: bool=False):
         if openAI_model == OpenAIChat.OpenAIModel.GPT_4O:
             input("[Warning] Using the more expensive GPT 4O model [press Enter to continue]")
         self.openAI_model = openAI_model
-        super().__init__(str(self.openAI_model), system_message, chat_format)
+        super().__init__(str(self.openAI_model), system_message, chat_format, raise_error)
     
     # TODO perhaps this should be moved to openAILib, since it has info about the existance of a chat_log
     def copy(self) -> OpenAIChat:
@@ -202,9 +207,9 @@ class GeminiChat(OpenAILib):
     }
 
     CLIENT = None
-    def __init__(self, gemini_model:GeminiChat.GeminiModel, system_message: str|None=None, chat_format=True):
+    def __init__(self, gemini_model:GeminiChat.GeminiModel, system_message: str|None=None, chat_format: bool=True, raise_error: bool=False):
         self.gemini_model = gemini_model
-        super().__init__(str(self.gemini_model), system_message, chat_format)
+        super().__init__(str(self.gemini_model), system_message, chat_format, raise_error)
 
     # TODO perhaps this should be moved to openAILib, since it has info about the existance of a chat_log
     def copy(self) -> GeminiChat:
@@ -238,11 +243,11 @@ class DeepSeekChat(OpenAILib):
     }
     
     CLIENT = None
-    def __init__(self, deepSeek_model:DeepSeekChat.DeepSeekModel, system_message: str|None=None, chat_format=True):
+    def __init__(self, deepSeek_model:DeepSeekChat.DeepSeekModel, system_message: str|None=None, chat_format: bool=True, raise_error: bool=False):
         if deepSeek_model == DeepSeekChat.DeepSeekModel.DEEP_SEEK_REASONER:
             input("[Warning] Using the more expensive deep seek reasoner model [press Enter to continue]")
         self.deepSeek_model = deepSeek_model
-        super().__init__(str(self.deepSeek_model), system_message, chat_format)
+        super().__init__(str(self.deepSeek_model), system_message, chat_format, raise_error)
     
     # TODO perhaps this should be moved to openAILib, since it has info about the existance of a chat_log
     def copy(self) -> DeepSeekChat:
@@ -272,9 +277,9 @@ class DeepInfraChat(OpenAILib):
     }
     
     CLIENT = None
-    def __init__(self, deepinfra_model:DeepInfraChat.DeepInfraModel, system_message: str|None=None, chat_format=True):
+    def __init__(self, deepinfra_model:DeepInfraChat.DeepInfraModel, system_message: str|None=None, chat_format: bool=True, raise_error: bool=False):
         self.deepinfra_model = deepinfra_model
-        super().__init__(str(self.deepinfra_model), system_message, chat_format)
+        super().__init__(str(self.deepinfra_model), system_message, chat_format, raise_error)
     
     # TODO perhaps this should be moved to openAILib, since it has info about the existance of a chat_log
     def copy(self) -> DeepInfraChat:
