@@ -10,10 +10,11 @@ from kube_util import get_seed, setup_logging, get_logger, get_batch_client, run
 
 repo_url = "https://github.com/iambb5445/SolitaireGDL"
 repo_name = "sgdl"
+# TODO these values shouldn't be here, they should be args or config
 move_cap = 2000
 game_count = 10
 
-def make_eval_job(job_name: str, seed: int, gen_dir: str, num_workers: int):
+def make_eval_job(job_name: str, dir: str, num_workers: int):
     repo_path = get_repo_path(repo_name)
     # Each worker: pip install pandas (if not in image already), then run evaluate.py
     # JOB_COMPLETION_INDEX is injected automatically by k8s Indexed Jobs (it's magic)
@@ -22,8 +23,8 @@ def make_eval_job(job_name: str, seed: int, gen_dir: str, num_workers: int):
     cmd = (
         # "pip install 'pandas==2.2.3' -q && "
         f"cd {repo_path} && "
-        f"pypy3 job_scripts/evaluate.py {gen_dir} {move_cap} {game_count} "
-        f"--seed {seed} --ignore-errors --should-log "
+        f"pypy3 job_scripts/evaluate.py {dir} {move_cap} {game_count} "
+        f"--hash-as-seed --ignore-errors --should-log "
         f"--worker-index $JOB_COMPLETION_INDEX --worker-count {num_workers}"
     )
     main = client.V1Container(
@@ -68,6 +69,31 @@ def make_eval_job(job_name: str, seed: int, gen_dir: str, num_workers: int):
         ),
     )
 
+def get_merge_command(dir: str):
+    merge_cmd = (
+        "pip install pandas -q && "
+        "python3 -c \""
+        "import pandas as pd, glob, os; "
+        f"files = sorted(glob.glob('{dir}/evaluation_worker_*.csv')); "
+        "df = pd.concat([pd.read_csv(f) for f in files], ignore_index=True); "
+        f"df.to_csv('{dir}/evaluation.csv', index=False); "
+        "print(f'Merged ' + str(len(files)) + ' files, ' + str(len(df)) + ' rows')"
+        "\""
+    )
+    return merge_cmd
+
+def get_build_history_commands(gen_dir: str, prev_dir: str, oneshot: bool, history_count: int, skill: bool):
+    repo_path = get_repo_path(repo_name)
+    skill_flag = " --skill" if skill else ""
+    history_cmd = (
+        f"cd {repo_path} && python job_scripts/make_llm_history.py "
+        f"{gen_dir} --ignore-non-existent --prev-dir {prev_dir} "
+    )
+    history_cmd += f"--included-history {history_count}{skill_flag}" if not oneshot else "--oneshot"
+    validate_cmd = f"python job_scripts/validate.py {gen_dir}"
+    return [history_cmd, validate_cmd]
+
+
 # TODO I can run this at the start of prep job instead of running this in a separate job
 def make_cleanup_job(batch_api: client.BatchV1Api, gen: int, results_dir: str, variant: str|None, log: logging.Logger,
                      build_history: bool = False, oneshot: bool = False, history_count: int = 0, skill: bool = False):
@@ -75,30 +101,11 @@ def make_cleanup_job(batch_api: client.BatchV1Api, gen: int, results_dir: str, v
     prev_dir = f"{results_dir}/g{gen-1}"
     job_name = f"sgdl-evo-merge-g{gen}{('-' + variant) if variant else ''}"
 
-    merge_cmd = (
-        "pip install pandas -q && "
-        "python3 -c \""
-        "import pandas as pd, glob, os; "
-        f"files = sorted(glob.glob('{gen_dir}/evaluation_worker_*.csv')); "
-        "df = pd.concat([pd.read_csv(f) for f in files], ignore_index=True); "
-        f"df.to_csv('{gen_dir}/evaluation.csv', index=False); "
-        "print(f'Merged ' + str(len(files)) + ' files, ' + str(len(df)) + ' rows')"
-        "\""
-    )
-
-    commands = [merge_cmd]
+    commands = [get_merge_command(gen_dir)]
     image = Images.jupyter if build_history else Images.python
 
     if build_history:
-        repo_path = get_repo_path(repo_name)
-        skill_flag = " --skill" if skill else ""
-        history_cmd = (
-            f"cd {repo_path} && python job_scripts/make_llm_history.py "
-            f"{gen_dir} --ignore-non-existent --prev-dir {prev_dir} "
-        )
-        history_cmd += f"--included-history {history_count}{skill_flag}" if not oneshot else "--oneshot"
-        validate_cmd = f"python job_scripts/validate.py {gen_dir}"
-        commands += [history_cmd, validate_cmd]
+        commands += get_build_history_commands(gen_dir, prev_dir, oneshot, history_count, skill)
 
     job = make_job(job_name, image, commands)
     submit_job(batch_api, job, log)
@@ -133,7 +140,7 @@ def run_prep_job(gen: int, rnd: Random, results_dir: str, variant: str, populati
         random_seed = get_seed(rnd)
         log.info(f"Copy seed: {copy_best_seed} | Mutation seed: {mutation_seed} | Crossover seed: {crossover_seed} | Random seed: {random_seed}")
         commands = [
-            f"mkdir -p {g_curr} {g_best}",
+            f"rm -rf {g_curr} && mkdir -p {g_curr} {g_best}",
 
             f"cd {repo_path} && {run_command} job_scripts/choose_best.py "
             f"{eval_csv} {g_prev} {g_best} {move_cap} --ignore-non-existent --index-from-existing",
@@ -162,13 +169,13 @@ def run_prep_job(gen: int, rnd: Random, results_dir: str, variant: str, populati
     return wait_for_job(batch_api, job_name, log)
 
 def run_eval_job(
-        gen: int, seed: int, results_dir: str, variant: str, worker_count: int, batch_api: client.BatchV1Api,
+        gen: int, results_dir: str, variant: str, worker_count: int, batch_api: client.BatchV1Api,
         log: logging.Logger
     ):
     gen_dir = f"{results_dir}/g{gen}"
     job_name = f"sgdl-evo-eval-g{gen}{('-' + variant) if variant else ''}"
 
-    job = make_eval_job(job_name, seed, gen_dir, worker_count)
+    job = make_eval_job(job_name, gen_dir, worker_count)
     submit_job(batch_api, job, log)
     return wait_for_job(batch_api, job_name, log)
 
@@ -236,7 +243,7 @@ def main():
             log.error(f"Prep job for gen {gen} failed. Exiting.")
             sys.exit(1)
 
-        ok = run_eval_job(gen, eval_seed, results_dir, variant, worker_count, batch_api, log)
+        ok = run_eval_job(gen, results_dir, variant, worker_count, batch_api, log)
         if not ok:
             log.error(f"Eval job for gen {gen} failed. Exiting.")
             sys.exit(1)

@@ -456,14 +456,12 @@ be told:
   - **Moves** -- if Win is true, the length of the winning sequence the bot \
     happened to find (not necessarily the shortest or most elegant one, since the \
     bot isn't optimal). If Win is false, this is how much the bot searched before \
-    giving up: either it hit a {move_cap}-move search cap, or it fully explored every \
-    state reachable from the deal and confirmed no win exists. A search that's \
-    *fully* exhausted well under {move_cap} moves (especially close to 0) is strong \
-    evidence the deal is a genuine dead end, not just a hard one; hitting the \
-    {move_cap}-move cap is much weaker evidence, since a cleverer search might still find \
-    a win the bot didn't reach in time.
-  - **Exhausted** -- true whenever no win was found (whether by hitting the cap or \
-    by fully exploring the state space); false whenever a win was found.
+    giving up: either it hit a {move_cap}-move search cap or ran out of time, or it \
+    fully explored every state reachable from the deal and confirmed no win exists.
+  - **Exhausted** -- true whenever the state space was fully explored, and it was \
+    proven a win is not possible from the start state of this simulation. If this \
+    is false and Win is also false, the game is inconclusive due to {move_cap}-move \
+    move cap or time limit.
   - **Card Usage** / **Pile Usage** -- roughly, what fraction of the deck's cards \
     and of the game's piles were actually engaged at some point during the bot's \
     play. These are most meaningful on a win: if a deal is won but usage is low, \
@@ -612,12 +610,12 @@ def _eval_section(eval_df: pd.DataFrame | None) -> str:
         )
     if len(losses) > 0:
         dead_on_arrival = int((losses["Move Count"] == 0).sum())
-        capped = int((losses["Move Count"] >= move_cap).sum())
+        exhausted = int((losses["Exhausted"]).sum())
         bit = f"Among losses: avg search length {losses['Move Count'].mean():.1f} moves"
         if dead_on_arrival:
             bit += f", {dead_on_arrival} had zero legal moves from the start"
-        if capped:
-            bit += f", {capped} hit the {move_cap}-move search cap (inconclusive)"
+        if exhausted:
+            bit += f", {exhausted} fully explored all reachable states and proved win is impossible"
         summary_bits.append(bit + ".")
 
     return f"{table}\n\n{' '.join(summary_bits)}"

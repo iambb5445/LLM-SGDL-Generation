@@ -13,7 +13,6 @@ from typing import ParamSpec
 
 pvc_name = "sgdl-evo-results"
 namespace = "design-reasoning-lab"
-helper_pod_name = "sgdl-evo-pvc-helper"
 
 class Images:
     jupyter = "gitlab-registry.nrp-nautilus.io/prp/jupyter-stack/prp"
@@ -28,6 +27,9 @@ def get_seed(rnd: Random|None):
 
 def get_logger(name):
     return logging.getLogger(name)
+
+def _get_helper_pod_name(variant: str) -> str:
+    return f"sgdl-evo-pvc-helper{('-' + variant) if variant else ''}"
 
 def setup_logging(log_path: str|None):
     handlers: list[logging.Handler] = [logging.StreamHandler(sys.stdout)]
@@ -154,7 +156,7 @@ def wait_for_job(batch_api: client.BatchV1Api, job_name: str, log: logging.Logge
             return False
         time.sleep(poll_interval)
 
-def _make_pvc_helper_pod() -> client.V1Pod:
+def _make_pvc_helper_pod(variant: str) -> client.V1Pod:
     container = client.V1Container(
         name="pvc-helper",
         image="alpine",
@@ -177,45 +179,45 @@ def _make_pvc_helper_pod() -> client.V1Pod:
     return client.V1Pod(
         api_version="v1",
         kind="Pod",
-        metadata=client.V1ObjectMeta(name=helper_pod_name, namespace=namespace),
+        metadata=client.V1ObjectMeta(name=_get_helper_pod_name(variant), namespace=namespace),
         spec=pod_spec,
     )
 
-def _get_pvc_helper_phase(core_api: client.CoreV1Api, log: logging.Logger) -> str|None:
-    pod = _api_call_with_retry(core_api.read_namespaced_pod, log, name=helper_pod_name, namespace=namespace)
+def _get_pvc_helper_phase(variant: str, core_api: client.CoreV1Api, log: logging.Logger) -> str|None:
+    pod = _api_call_with_retry(core_api.read_namespaced_pod, log, name=_get_helper_pod_name(variant), namespace=namespace)
     assert isinstance(pod, client.V1Pod)
     phase = pod.status.phase if pod.status else None
     return phase
 
-def ensure_pvc_helper(core_api: client.CoreV1Api, log: logging.Logger, timeout: int = 120):
+def ensure_pvc_helper(variant: str, core_api: client.CoreV1Api, log: logging.Logger, timeout: int = 120):
     try:
-        phase = _get_pvc_helper_phase(core_api, log)
+        phase = _get_pvc_helper_phase(variant, core_api, log)
         if phase == "Running":
             return
-        log.info(f"{helper_pod_name} exists but is {phase}. Recreating.")
-        _api_call_with_retry(core_api.delete_namespaced_pod, log, name=helper_pod_name, namespace=namespace)
+        log.info(f"{_get_helper_pod_name(variant)} exists but is {phase}. Recreating.")
+        _api_call_with_retry(core_api.delete_namespaced_pod, log, name=_get_helper_pod_name(variant), namespace=namespace)
         time.sleep(3)
     except ApiException as e:
         if e.status != 404: # 404 is when pod doesn't exist
             raise
 
-    log.info(f"Creating PVC helper pod {helper_pod_name}")
-    _api_call_with_retry(core_api.create_namespaced_pod, log, namespace=namespace, body=_make_pvc_helper_pod())
+    log.info(f"Creating PVC helper pod {_get_helper_pod_name(variant)}")
+    _api_call_with_retry(core_api.create_namespaced_pod, log, namespace=namespace, body=_make_pvc_helper_pod(variant))
 
     start_time = time.time()
     while True:
-        phase = _get_pvc_helper_phase(core_api, log)
+        phase = _get_pvc_helper_phase(variant, core_api, log)
         if phase == "Running":
-            log.info(f"{helper_pod_name} is running.")
+            log.info(f"{_get_helper_pod_name(variant)} is running.")
             return
         if time.time() - start_time >= timeout:
-            raise TimeoutError(f"Timed out waiting for {helper_pod_name} to start (phase={phase})")
+            raise TimeoutError(f"Timed out waiting for {_get_helper_pod_name(variant)} to start (phase={phase})")
         time.sleep(3)
 
-def teardown_pvc_helper(core_api: client.CoreV1Api, log: logging.Logger, timeout: int = 30):
+def teardown_pvc_helper(variant: str, core_api: client.CoreV1Api, log: logging.Logger, timeout: int = 30):
     try:
-        _api_call_with_retry(core_api.delete_namespaced_pod, log, name=helper_pod_name, namespace=namespace, grace_period_seconds=0)
-        log.info(f"Deleted PVC helper pod {helper_pod_name}.")
+        _api_call_with_retry(core_api.delete_namespaced_pod, log, name=_get_helper_pod_name(variant), namespace=namespace, grace_period_seconds=0)
+        log.info(f"Deleted PVC helper pod {_get_helper_pod_name(variant)}.")
     except ApiException as e:
         if e.status != 404:
             raise
@@ -224,48 +226,48 @@ def teardown_pvc_helper(core_api: client.CoreV1Api, log: logging.Logger, timeout
     start_time = time.time()
     while time.time() - start_time < timeout:
         try:
-            _api_call_with_retry(core_api.read_namespaced_pod, log, name=helper_pod_name, namespace=namespace)
+            _api_call_with_retry(core_api.read_namespaced_pod, log, name=_get_helper_pod_name(variant), namespace=namespace)
         except ApiException as e:
             if e.status == 404:
                 return
             raise
         time.sleep(1)
-    log.warning(f"{helper_pod_name} didn't fully terminate within {timeout}s.")
+    log.warning(f"{_get_helper_pod_name(variant)} didn't fully terminate within {timeout}s.")
 
 # I can use it with: with pvc_transfer_session(core_api, log):
 @contextmanager
-def pvc_transfer_session(core_api: client.CoreV1Api, log: logging.Logger):
-    ensure_pvc_helper(core_api, log)
+def pvc_transfer_session(variant: str, core_api: client.CoreV1Api, log: logging.Logger):
+    ensure_pvc_helper(variant, core_api, log)
     try:
         yield
     finally:
-        teardown_pvc_helper(core_api, log)
+        teardown_pvc_helper(variant, core_api, log)
 
-def helper_exec(cmd: str, log: logging.Logger) -> str:
-    full_cmd = ["kubectl", "exec", "-n", namespace, helper_pod_name, "--", "sh", "-c", cmd]
+def helper_exec(variant: str, cmd: str, log: logging.Logger) -> str:
+    full_cmd = ["kubectl", "exec", "-n", namespace, _get_helper_pod_name(variant), "--", "sh", "-c", cmd]
     result = subprocess.run(full_cmd, capture_output=True, text=True)
     if result.returncode != 0:
         log.error(f"helper_exec failed ({cmd}):\n{result.stderr}")
         raise RuntimeError(f"helper_exec failed: {result.stderr.strip()}")
     return result.stdout
 
-def copy_from_pvc(remote_path: str, local_path: str, log: logging.Logger):
+def copy_from_pvc(remote_path: str, local_path: str, variant: str, log: logging.Logger):
     local_path = Path(local_path).as_posix()
     parent = os.path.dirname(local_path.rstrip("/")) or "."
     os.makedirs(parent, exist_ok=True)
     # contrary to copy_to_pvc, this doesn't need /.
-    cmd = ["kubectl", "cp", "-n", namespace, f"{helper_pod_name}:{remote_path}", local_path]
+    cmd = ["kubectl", "cp", "-n", namespace, f"{_get_helper_pod_name(variant)}:{remote_path}", local_path]
     log.info(f"kubectl cp {remote_path} (pvc) -> {local_path} (local)")
     result = subprocess.run(cmd, capture_output=True, text=True)
     if result.returncode != 0:
         log.error(f"copy_from_pvc failed:\n{result.stderr}")
         raise RuntimeError(f"copy_from_pvc failed: {result.stderr.strip()}")
 
-def copy_to_pvc(local_path: str, remote_path: str, log: logging.Logger):
+def copy_to_pvc(local_path: str, remote_path: str, variant: str, log: logging.Logger):
     local_path = Path(local_path).as_posix()
-    helper_exec(f"mkdir -p {remote_path}", log)
+    helper_exec(variant, f"mkdir -p {remote_path}", log)
     local_path = f"{local_path}/." # otherwise this will also copy the folder itself
-    cmd = ["kubectl", "cp", "-n", namespace, local_path, f"{helper_pod_name}:{remote_path}"]
+    cmd = ["kubectl", "cp", "-n", namespace, local_path, f"{_get_helper_pod_name(variant)}:{remote_path}"]
     log.info(f"kubectl cp {local_path} (local) -> {remote_path} (pvc)")
     result = subprocess.run(cmd, capture_output=True, text=True)
     if result.returncode != 0:

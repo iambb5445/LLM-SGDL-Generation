@@ -35,6 +35,8 @@ def ask_until_valid(chat: OpenAILib, prompt: str) -> tuple[str|None, OpenAILib]:
         try:
             chat_copy = chat.copy()
             response = chat_copy.ask(prompt)
+            if len(response) == 0:
+                raise Exception("Empty response")
             return response, chat_copy
         except Exception as e:
             print(f"ERROR, retrying: {e}")
@@ -66,7 +68,7 @@ def get_lineage(gen: int, filename: str, history_count: int, local_workdir: str)
     data.reverse()
     return data
 
-def prep_llm(gen: int, results_dir: str, local_workdir: str, model: str, history_count: int,
+def prep_llm(gen: int, results_dir: str, local_workdir: str, variant: str, model: str, history_count: int,
              skill: bool, log_dir: str, log: logging.Logger, core_api: client.CoreV1Api) -> bool:
     g_prev = f"{results_dir}/g{gen - 1}"
     g_curr = f"{results_dir}/g{gen}"
@@ -74,9 +76,9 @@ def prep_llm(gen: int, results_dir: str, local_workdir: str, model: str, history
     local_curr = os.path.join(local_workdir, f"g{gen}-temp")
     os.makedirs(local_curr, exist_ok=True)
 
-    with pvc_transfer_session(core_api, log):
+    with pvc_transfer_session(variant, core_api, log):
         log.info(f"Pulling {g_prev} from PVC -> {local_prev}")
-        copy_from_pvc(g_prev, local_prev, log)
+        copy_from_pvc(g_prev, local_prev, variant, log)
 
     filenames = sorted(f for f in os.listdir(local_prev) if f.endswith(".sgdl"))
     mapping: dict[str, str] = {}
@@ -115,9 +117,9 @@ def prep_llm(gen: int, results_dir: str, local_workdir: str, model: str, history
 
     write_dict(local_curr, "mapping.json", mapping)
 
-    with pvc_transfer_session(core_api, log):
+    with pvc_transfer_session(variant, core_api, log):
         log.info(f"Pushing {local_curr} -> PVC at {g_curr}")
-        copy_to_pvc(local_curr, g_curr, log)
+        copy_to_pvc(local_curr, g_curr, variant, log)
 
     return True
 
@@ -132,6 +134,7 @@ def main():
     parser.add_argument("--llm-model", type=str, required=True, help=f"Model to be used. Possible options are: {', '.join([key for key in llm_models.keys()])}")
     parser.add_argument("--llm-history", type=int, default=0, help="The number of previous steps passed to the LLM. If 0, the LLM only has access to the current version of the gdl and its evaluation. Otherwise, if exists, it can also see the previous changes it has applied to the gdl and the evaluation results of each step.")
     parser.add_argument('--skill', action="store_true", help="If true, the LLM will update a skill.md file based on each evaluation results. This file is passed to the LLM at every point and is updated only after evaluation of each generation.")
+    parser.add_argument('--skip-prep', action="store_true", help="If true, this will skip the preparation phase and start from evaluation in start-gen. The rest of the generations are handled normally.")
     parser.add_argument("--eval-workers", type=int, default=10, help="Number of workers used to parallelize evaluation process.")
     parser.add_argument("--variant", type=str, default="", help="Optional name suffix for job names (e.g. 'llm', 'llm-skil')")
     parser.add_argument("--local-workdir", default=None, help="Local directory used to stage generations when passing to LLM. If not given (recommended), uses timestamp and variant.")
@@ -183,17 +186,18 @@ def main():
         eval_seed = get_seed(experiment_rnd)
         log.info(f"Generation Seed: {gen_seed} | Evaluation Seed: {eval_seed}")
 
-        if gen == 0:
-            ok = run_prep_job(gen, Random(gen_seed), results_dir, variant, population_size,
-                              0, 0, 0, 0, 0, batch_api, log)
-        else:
-            ok = prep_llm(gen, results_dir, local_workdir, llm_model, llm_history, skill, log_dir, log, core_api)
+        if not args.skip_prep or gen > args.start_gen:
+            if gen == 0:
+                ok = run_prep_job(gen, Random(gen_seed), results_dir, variant, population_size,
+                                0, 0, 0, 0, 0, batch_api, log)
+            else:
+                ok = prep_llm(gen, results_dir, local_workdir, variant, llm_model, llm_history, skill, log_dir, log, core_api)
 
-        if not ok:
-            log.error(f"Prep job for gen {gen} failed. Exiting.")
-            sys.exit(1)
+            if not ok:
+                log.error(f"Prep job for gen {gen} failed. Exiting.")
+                sys.exit(1)
 
-        ok = run_eval_job(gen, eval_seed, results_dir, variant, worker_count, batch_api, log)
+        ok = run_eval_job(gen, results_dir, variant, worker_count, batch_api, log)
         if not ok:
             log.error(f"Eval job for gen {gen} failed. Exiting.")
             sys.exit(1)
@@ -211,9 +215,9 @@ def main():
     # download final generation to local_workdir so I can easily browse them
     final_remote = f"{results_dir}/g{end_gen}"
     final_local = os.path.join(local_workdir, f"g{end_gen}")
-    with pvc_transfer_session(core_api, log):
+    with pvc_transfer_session(variant, core_api, log):
         log.info(f"Downloading final generation {end_gen} -> {final_local}")
-        copy_from_pvc(final_remote, final_local, log)
+        copy_from_pvc(final_remote, final_local, variant, log)
 
 
 if __name__ == "__main__":

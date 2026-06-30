@@ -43,6 +43,6 @@ Use
 kubectl cp design-reasoning-lab/pvc-browser:/mnt/results/1234567890/g0/evaluation.csv ./evaluation.csv
 
 # Copy a whole directory
-kubectl cp design-reasoning-lab/pvc-browser:/mnt/results/1234567890 ./results
+kubectl cp design-reasoning-lab/pvc-browser:/mnt/results/1234567890 ./results/1234567890
 ```
 whie the above command for viewing files is running and keeping pvc-browser alive
