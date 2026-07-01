@@ -150,9 +150,11 @@ def wait_for_job(batch_api: client.BatchV1Api, job_name: str, log: logging.Logge
         log.info(f"  {job_name}: active={active} succeeded={succeeded} failed={failed} target={spec_completions}")
         if succeeded >= spec_completions:
             log.info(f"  '{job_name}' complete.")
+            log_job_output(job_name, log)
             return True
         if failed > backoff_limit:
             log.error(f"  '{job_name}' failed.")
+            log_job_output(job_name, log)
             return False
         time.sleep(poll_interval)
 
@@ -273,3 +275,11 @@ def copy_to_pvc(local_path: str, remote_path: str, variant: str, log: logging.Lo
     if result.returncode != 0:
         log.error(f"copy_to_pvc failed:\n{result.stderr}")
         raise RuntimeError(f"copy_to_pvc failed: {result.stderr.strip()}")
+    
+def log_job_output(job_name: str, log: logging.Logger):
+    result = subprocess.run(
+        ["kubectl", "logs", "-n", namespace, f"job/{job_name}"],
+        capture_output=True, text=True
+    )
+    for line in result.stdout.splitlines():
+        log.info(f"  [{job_name}] {line}")
