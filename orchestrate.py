@@ -155,13 +155,16 @@ def run_prep_job(gen: int, rnd: Random, results_dir: str, variant: str, populati
             f"{g_best} {crossover_count} {g_curr} --seed {crossover_seed} --ignore-errors --index-from-existing  --max-per-game {max_crossover_per_game}",
 
             # fill remainder with random games
-            f"EXISTING=$(ls {g_curr}/*.sgdl 2>/dev/null | wc -l); "
-            # I can't calculate this beforehand because crossover/mutation might fail because of lack of parents
-            # also we don't know the number of "good" games copied from the previous generation
-            f"REMAINING=$(( {population_size} - EXISTING )); "
-            f"[ $REMAINING -gt 0 ] && "
+            # f"EXISTING=$(ls {g_curr}/*.sgdl 2>/dev/null | wc -l); "
+            # # I can't calculate this beforehand because crossover/mutation might fail because of lack of parents
+            # # also we don't know the number of "good" games copied from the previous generation
+            # f"REMAINING=$(( {population_size} - EXISTING )); "
+            # f"[ $REMAINING -gt 0 ] && "
+            # f"{run_command} job_scripts/generate_random.py "
+            # f"$REMAINING {g_curr} --seed {random_seed} --ignore-errors --index-from-existing"
+            # alternatively
             f"{run_command} job_scripts/generate_random.py "
-            f"$REMAINING {g_curr} --seed {random_seed} --ignore-errors --index-from-existing"
+            f"{population_size} {g_curr} --seed {random_seed} --ignore-errors --index-from-existing --until"
         ]
 
     job = make_job(job_name, Images.jupyter, commands)
