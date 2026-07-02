@@ -25,7 +25,8 @@ repo_name = "sgdl"
 llm_models: dict[str, Callable[[str], OpenAILib]] = {
     'gpt4o-mini': lambda sm: OpenAIChat(OpenAIChat.OpenAIModel.GPT_4O_mini, sm, raise_error=True),
     'gpt5.4': lambda sm: OpenAIChat(OpenAIChat.OpenAIModel.GPT_54, sm, raise_error=True),
-    'deepseek-r1': lambda sm: DeepSeekChat(DeepSeekChat.DeepSeekModel.DEEP_SEEK_REASONER, sm, raise_error=True),
+    'deepseek-v4-pro': lambda sm: DeepSeekChat(DeepSeekChat.DeepSeekModel.DEEP_SEEK_V4_PRO, sm, raise_error=True),
+    'deepseek-v4-flash': lambda sm: DeepSeekChat(DeepSeekChat.DeepSeekModel.DEEP_SEEK_V4_FLASH, sm, raise_error=True),
     # TODO more
 }
 
@@ -100,7 +101,7 @@ def prep_llm(gen: int, results_dir: str, local_workdir: str, variant: str, model
         new_filename = f"{index}_{name}.sgdl"
         mapping[new_filename] = filename
         write_dict(log_dir, f"g{gen}_{index}_{name}.log", used_chat.chat_log)
-        write_file(local_curr, f"{index}_{name}.sgdl", sgdl if sgdl is not None else lineage[-1][0])
+        write_file(local_curr, f"{index}_{name}.sgdl", sgdl if sgdl is not None and len(sgdl) > 0 else lineage[-1][0])
     
     if skill:
         skill_prompt = get_skill_refinement_prompt(prev_skill_filename, insights)

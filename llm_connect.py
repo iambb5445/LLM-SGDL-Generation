@@ -236,16 +236,20 @@ class DeepSeekChat(OpenAILib):
     class DeepSeekModel(StrEnum):
         DEEP_SEEK_CHAT = "deepseek-chat"
         DEEP_SEEK_REASONER = "deepseek-reasoner"
+        DEEP_SEEK_V4_PRO = "deepseek-v4-pro"
+        DEEP_SEEK_V4_FLASH = "deepseek-v4-flash"
     
     TOKEN_LIMITS = { # no limits: https://api-docs.deepseek.com/quick_start/rate_limit
         DeepSeekModel.DEEP_SEEK_CHAT: 10_000_000,
-        DeepSeekModel.DEEP_SEEK_REASONER: 10_000_000
-    }
+        DeepSeekModel.DEEP_SEEK_REASONER: 10_000_000,
+        DeepSeekModel.DEEP_SEEK_V4_PRO: 10_000_000,
+        DeepSeekModel.DEEP_SEEK_V4_FLASH: 10_000_000,
+    } # there is a concurrent calls per minute limit https://api-docs.deepseek.com/quick_start/rate_limit
     
     CLIENT = None
     def __init__(self, deepSeek_model:DeepSeekChat.DeepSeekModel, system_message: str|None=None, chat_format: bool=True, raise_error: bool=False):
-        if deepSeek_model == DeepSeekChat.DeepSeekModel.DEEP_SEEK_REASONER:
-            input("[Warning] Using the more expensive deep seek reasoner model [press Enter to continue]")
+        # if deepSeek_model == DeepSeekChat.DeepSeekModel.DEEP_SEEK_REASONER:
+        #     input("[Warning] Using the more expensive deep seek reasoner model [press Enter to continue]")
         self.deepSeek_model = deepSeek_model
         super().__init__(str(self.deepSeek_model), system_message, chat_format, raise_error)
     
