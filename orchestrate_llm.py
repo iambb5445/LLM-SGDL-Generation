@@ -5,7 +5,8 @@ import sys
 import os
 import time
 from random import Random
-from typing import Callable
+from typing import Callable, TypeAlias
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from kube_util import get_seed, setup_logging, get_logger, get_batch_client, get_core_client, run_setup_git, \
     pvc_name, namespace, pvc_transfer_session, copy_from_pvc, copy_to_pvc
 from orchestrate import run_prep_job, run_eval_job, make_cleanup_job
@@ -21,10 +22,12 @@ repo_name = "sgdl"
 # Especially since the orchestrate code is already running locally, I can also run the LLM code
 # llm_repo_url = "https://github.com/iambb5445/..."
 # llm_repo_name = "llm"
+ResultTuple: TypeAlias = tuple[int, str, OpenAILib, str | None, str]
 
 llm_models: dict[str, Callable[[str], OpenAILib]] = {
     'gpt4o-mini': lambda sm: OpenAIChat(OpenAIChat.OpenAIModel.GPT_4O_mini, sm, raise_error=True),
     'gpt5.4': lambda sm: OpenAIChat(OpenAIChat.OpenAIModel.GPT_54, sm, raise_error=True),
+    'deepseek-reasoner': lambda sm: DeepSeekChat(DeepSeekChat.DeepSeekModel.DEEP_SEEK_REASONER, sm, raise_error=True),
     'deepseek-v4-pro': lambda sm: DeepSeekChat(DeepSeekChat.DeepSeekModel.DEEP_SEEK_V4_PRO, sm, raise_error=True),
     'deepseek-v4-flash': lambda sm: DeepSeekChat(DeepSeekChat.DeepSeekModel.DEEP_SEEK_V4_FLASH, sm, raise_error=True),
     # TODO more
@@ -85,7 +88,8 @@ def prep_llm(gen: int, results_dir: str, local_workdir: str, variant: str, model
     mapping: dict[str, str] = {}
     insights: list[str] = []
     prev_skill_filename = os.path.join(local_prev, "skill.md") if skill else None
-    for index, filename in enumerate(filenames):
+
+    def process_one(index: int, filename: str):
         chat: OpenAILib = llm_models[model](system_message)
         lineage = get_lineage(gen, filename, history_count, local_workdir)
         user_messages, assistant_messages, prompt = get_prompt(lineage, prev_skill_filename)
@@ -95,13 +99,35 @@ def prep_llm(gen: int, results_dir: str, local_workdir: str, variant: str, model
         sgdl, insight = None, None
         if response is not None:
             sgdl, insight = process_response(response)
+        
+        content = sgdl if sgdl is not None and len(sgdl) > 0 else lineage[-1][0]
+        return index, filename, used_chat, insight, content
+
+    max_workers = min(len(filenames), 25) or 1
+    results: list[ResultTuple | None] = [None] * len(filenames)
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        futures = {
+            executor.submit(process_one, index, filename): (index, filename)
+            for index, filename in enumerate(filenames)
+        }
+        for future in as_completed(futures):
+            index, filename = futures[future]
+            try:
+                results[index] = future.result()
+            except Exception as e:
+                log.error(f"Unexpected error processing {filename} at index {index}: {e}")
+                raise
+
+    for result in results:
+        assert result is not None, "A worker slot was never filled; this should not happen."
+        index, filename, used_chat, insight, content = result
         if insight is not None:
             insights.append(insight)
         name = get_name_from_filename(filename)
         new_filename = f"{index}_{name}.sgdl"
         mapping[new_filename] = filename
         write_dict(log_dir, f"g{gen}_{index}_{name}.log", used_chat.chat_log)
-        write_file(local_curr, f"{index}_{name}.sgdl", sgdl if sgdl is not None and len(sgdl) > 0 else lineage[-1][0])
+        write_file(local_curr, f"{index}_{name}.sgdl", content)
     
     if skill:
         skill_prompt = get_skill_refinement_prompt(prev_skill_filename, insights)
@@ -190,7 +216,7 @@ def main():
         if not args.skip_prep or gen > args.start_gen:
             if gen == 0:
                 ok = run_prep_job(gen, Random(gen_seed), results_dir, variant, population_size,
-                                0, 0, 0, 0, 0, batch_api, log)
+                                0, 0, 0, 0, 0, batch_api, log, False)
             else:
                 ok = prep_llm(gen, results_dir, local_workdir, variant, llm_model, llm_history, skill, log_dir, log, core_api)
 
