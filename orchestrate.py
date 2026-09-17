@@ -114,11 +114,12 @@ def make_cleanup_job(batch_api: client.BatchV1Api, gen: int, results_dir: str, v
 def run_prep_job(gen: int, rnd: Random, results_dir: str, variant: str, population_size: int,
                  mutation_count: int, crossover_count: int, max_copied_count: int,
                  max_mutations_per_game: int, max_crossover_per_game: int, batch_api: client.BatchV1Api,
-                 log: logging.Logger):
+                 log: logging.Logger, map_elite: bool):
     g_prev = f"{results_dir}/g{gen - 1}"
     g_best = f"{results_dir}/g{gen - 1}-best"
     g_curr = f"{results_dir}/g{gen}"
     eval_csv = f"{g_prev}/evaluation.csv"
+    bd_csv = f"{g_prev}/bd_metrics.csv"
     repo_path = get_repo_path(repo_name)
     job_name = f"sgdl-evo-prep-g{gen}{('-' + variant) if variant else ''}"
     # run_command = "pypy3"
@@ -139,12 +140,18 @@ def run_prep_job(gen: int, rnd: Random, results_dir: str, variant: str, populati
         crossover_seed = get_seed(rnd)
         random_seed = get_seed(rnd)
         log.info(f"Copy seed: {copy_best_seed} | Mutation seed: {mutation_seed} | Crossover seed: {crossover_seed} | Random seed: {random_seed}")
-        commands = [
-            f"rm -rf {g_curr} && mkdir -p {g_curr} {g_best}",
-
+        commands = [f"rm -rf {g_curr} && mkdir -p {g_curr} {g_best}"]
+        commands += [
             f"cd {repo_path} && {run_command} job_scripts/choose_best.py "
             f"{eval_csv} {g_prev} {g_best} {move_cap} --ignore-non-existent --index-from-existing",
+        ] if not map_elite else [
+            f"cd {repo_path} && {run_command} job_scripts/calculate_bd.py "
+            f"{g_prev} {game_count} --hash-as-seed --ignore-errors",
 
+            f"{run_command} job_scripts/choose_elites.py "
+            f"{eval_csv} {bd_csv} {g_prev} {g_best} --should-log --ignore-non-existent --index-from-existing",
+        ]
+        commands += [
             f"{run_command} job_scripts/copy_best.py "
             f"{g_best} {max_copied_count} {g_curr} --seed {copy_best_seed} --index-from-existing",
 
@@ -198,6 +205,7 @@ def main():
     parser.add_argument("--max-crossover-per-game", type=int, default=1, help="Maximum number of crossover per game, to avoid mutating a few games many times and diluting the next generation.")
     parser.add_argument("--eval-workers", type=int, default=10, help="Number of workers used to parallelize evaluation process.")
     parser.add_argument("--variant", type=str, default="", help="Optional name suffix for job names (e.g. 'llm', 'llm-skil')")
+    parser.add_argument('--map-elites', action="store_true", help="Use map-elites instead of regular genetic algorithm to preserve diversity")
 
     args = parser.parse_args()
     variant = args.variant
@@ -217,6 +225,7 @@ def main():
     max_crossover_per_game = args.max_crossover_per_game
     expr_seed: int = args.seed if args.seed is not None else get_seed(None)
     experiment_rnd = Random(expr_seed)
+    should_map_elite = args.map_elites
 
     setup_logging(os.path.join(log_dir, "orchestrate.log"))
     log = get_logger(__name__)
@@ -241,7 +250,8 @@ def main():
 
         ok = run_prep_job(gen, Random(gen_seed), results_dir, variant, population_size,
                           mutation_count, crossover_count, max_copied_count,
-                          max_mutations_per_game, max_crossover_per_game, batch_api, log)
+                          max_mutations_per_game, max_crossover_per_game, batch_api, log,
+                          should_map_elite)
         if not ok:
             log.error(f"Prep job for gen {gen} failed. Exiting.")
             sys.exit(1)
