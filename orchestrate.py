@@ -206,6 +206,9 @@ def main():
     parser.add_argument("--eval-workers", type=int, default=10, help="Number of workers used to parallelize evaluation process.")
     parser.add_argument("--variant", type=str, default="", help="Optional name suffix for job names (e.g. 'llm', 'llm-skil')")
     parser.add_argument('--map-elites', action="store_true", help="Use map-elites instead of regular genetic algorithm to preserve diversity")
+    parser.add_argument('--skip-prep', action="store_true", help="If true, this will skip the preparation phase and start from evaluation in start-gen. The rest of the generations are handled normally.")
+    parser.add_argument('--skip-eval-calc', action="store_true", help="If true, this will skip the preparation phase and start from evaluation in start-gen. The rest of the generations are handled normally.")
+
 
     args = parser.parse_args()
     variant = args.variant
@@ -242,24 +245,35 @@ def main():
     log.info(f"Results at {results_dir}")
     log.info("=" * 50)
 
+    # synchronize experiment rnd
+    for gen in range(0, args.start_gen):
+        gen_seed = get_seed(experiment_rnd)
+        eval_seed = get_seed(experiment_rnd)
+
     for gen in range(args.start_gen, args.end_gen + 1):
         log.info(f"\n--- Generation {gen} ---")
         gen_seed = get_seed(experiment_rnd)
         eval_seed = get_seed(experiment_rnd)
         log.info(f"Generation Seed: {gen_seed} | Evaluation Seed: {eval_seed}")
 
-        ok = run_prep_job(gen, Random(gen_seed), results_dir, variant, population_size,
-                          mutation_count, crossover_count, max_copied_count,
-                          max_mutations_per_game, max_crossover_per_game, batch_api, log,
-                          should_map_elite)
-        if not ok:
-            log.error(f"Prep job for gen {gen} failed. Exiting.")
-            sys.exit(1)
+        if not args.skip_prep or gen > args.start_gen:
+            ok = run_prep_job(gen, Random(gen_seed), results_dir, variant, population_size,
+                            mutation_count, crossover_count, max_copied_count,
+                            max_mutations_per_game, max_crossover_per_game, batch_api, log,
+                            should_map_elite)
+            if not ok:
+                log.error(f"Prep job for gen {gen} failed. Exiting.")
+                sys.exit(1)
+        else:
+            log.info(f"Prep job for gen {gen} skipped.")
 
-        ok = run_eval_job(gen, results_dir, variant, worker_count, batch_api, log)
-        if not ok:
-            log.error(f"Eval job for gen {gen} failed. Exiting.")
-            sys.exit(1)
+        if not args.skip_eval_calc or gen > args.start_gen:
+            ok = run_eval_job(gen, results_dir, variant, worker_count, batch_api, log)
+            if not ok:
+                log.error(f"Eval job for gen {gen} failed. Exiting.")
+                sys.exit(1)
+        else:
+            log.info(f"Eval job for gen {gen} skipped. (Attempting cleanup)")
 
         # Merge partial CSVs from eval workers into evaluation.csv
         ok = make_cleanup_job(batch_api, gen, results_dir, variant, log)
