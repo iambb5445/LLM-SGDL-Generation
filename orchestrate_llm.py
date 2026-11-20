@@ -162,6 +162,7 @@ def main():
     parser.add_argument("--llm-history", type=int, default=0, help="The number of previous steps passed to the LLM. If 0, the LLM only has access to the current version of the gdl and its evaluation. Otherwise, if exists, it can also see the previous changes it has applied to the gdl and the evaluation results of each step.")
     parser.add_argument('--skill', action="store_true", help="If true, the LLM will update a skill.md file based on each evaluation results. This file is passed to the LLM at every point and is updated only after evaluation of each generation.")
     parser.add_argument('--skip-prep', action="store_true", help="If true, this will skip the preparation phase and start from evaluation in start-gen. The rest of the generations are handled normally.")
+    parser.add_argument('--skip-eval-calc', action="store_true", help="If true, this will skip the preparation phase and start from evaluation in start-gen. The rest of the generations are handled normally.")
     parser.add_argument("--eval-workers", type=int, default=10, help="Number of workers used to parallelize evaluation process.")
     parser.add_argument("--variant", type=str, default="", help="Optional name suffix for job names (e.g. 'llm', 'llm-skil')")
     parser.add_argument("--local-workdir", default=None, help="Local directory used to stage generations when passing to LLM. If not given (recommended), uses timestamp and variant.")
@@ -224,10 +225,13 @@ def main():
                 log.error(f"Prep job for gen {gen} failed. Exiting.")
                 sys.exit(1)
 
-        ok = run_eval_job(gen, results_dir, variant, worker_count, batch_api, log)
-        if not ok:
-            log.error(f"Eval job for gen {gen} failed. Exiting.")
-            sys.exit(1)
+        if not args.skip_eval_calc or gen > args.start_gen:
+            ok = run_eval_job(gen, results_dir, variant, worker_count, batch_api, log)
+            if not ok:
+                log.error(f"Eval job for gen {gen} failed. Exiting.")
+                sys.exit(1)
+        else:
+            log.info(f"Eval job for gen {gen} skipped. (Attempting cleanup)")
 
         ok = make_cleanup_job(batch_api, gen, results_dir, variant, log, oneshot=False,
                               build_history=(gen > 0), history_count=llm_history, skill=skill)
